@@ -228,5 +228,58 @@ int main(void) {
     bn_gguf_close(g);
 
     printf("Concurrent first-use encode/decode round-trips passed.\n");
+
+    /* Test tokenization with zero merges (no divide-by-zero in mt_lookup) */
+    {
+        bn_gguf_t *g2 = (bn_gguf_t *)calloc(1, sizeof(*g2));
+        assert(g2 != NULL);
+        g2->fd = -1;
+        g2->n_kv = 4;
+        g2->kvs = (bn_gguf_kv_t *)calloc((size_t)g2->n_kv, sizeof(g2->kvs[0]));
+        assert(g2->kvs != NULL);
+
+        char **tokens2 = (char **)calloc(TEST_VOCAB_SIZE, sizeof(tokens2[0]));
+        assert(tokens2 != NULL);
+        for (int i = 0; i < TEST_VOCAB_SIZE; i++) {
+            tokens2[i] = test_make_byte_token(i);
+        }
+
+        g2->kvs[0].key = strdup("tokenizer.ggml.tokens");
+        g2->kvs[0].type = BN_GGUF_TYPE_ARRAY;
+        g2->kvs[0].val.arr.type = BN_GGUF_TYPE_STRING;
+        g2->kvs[0].val.arr.len = TEST_VOCAB_SIZE;
+        g2->kvs[0].val.arr.data = tokens2;
+
+        g2->kvs[1].key = strdup("tokenizer.ggml.merges");
+        g2->kvs[1].type = BN_GGUF_TYPE_ARRAY;
+        g2->kvs[1].val.arr.type = BN_GGUF_TYPE_STRING;
+        g2->kvs[1].val.arr.len = 0;
+        g2->kvs[1].val.arr.data = NULL;
+
+        g2->kvs[2].key = strdup("tokenizer.ggml.bos_token_id");
+        g2->kvs[2].type = BN_GGUF_TYPE_UINT32;
+        g2->kvs[2].val.u32 = TEST_VOCAB_SIZE;
+
+        g2->kvs[3].key = strdup("tokenizer.ggml.eos_token_id");
+        g2->kvs[3].type = BN_GGUF_TYPE_UINT32;
+        g2->kvs[3].val.u32 = TEST_VOCAB_SIZE + 1;
+
+        bn_tokenizer_t *tok2 = bn_tokenizer_create(g2);
+        assert(tok2 != NULL);
+
+        int toks[256];
+        int n = bn_tokenize(tok2, "Hello", toks, 256);
+        assert(n > 1);
+
+        char *decoded = bn_detokenize(tok2, toks + 1, n - 1);
+        assert(decoded != NULL);
+        assert(strcmp(decoded, "Hello") == 0);
+        free(decoded);
+
+        bn_tokenizer_free(tok2);
+        bn_gguf_close(g2);
+        printf("Zero-merge tokenization round-trip passed.\n");
+    }
+
     return 0;
 }

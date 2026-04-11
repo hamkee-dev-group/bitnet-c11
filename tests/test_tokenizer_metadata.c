@@ -143,6 +143,85 @@ int main(void) {
     run_malformed_case("Reject non-uint32 EOS token ids",
                        &malformed_eos);
 
+    /* Zero-length token array: should reject empty vocabulary */
+    {
+        bn_gguf_t *g = (bn_gguf_t *)calloc(1, sizeof(*g));
+        assert(g != NULL);
+        g->fd = -1;
+        g->n_kv = 4;
+        g->kvs = (bn_gguf_kv_t *)calloc((size_t)g->n_kv, sizeof(g->kvs[0]));
+        assert(g->kvs != NULL);
+
+        g->kvs[0].key = strdup("tokenizer.ggml.tokens");
+        g->kvs[0].type = BN_GGUF_TYPE_ARRAY;
+        g->kvs[0].val.arr.type = BN_GGUF_TYPE_STRING;
+        g->kvs[0].val.arr.len = 0;
+        g->kvs[0].val.arr.data = NULL;
+
+        g->kvs[1].key = strdup("tokenizer.ggml.merges");
+        g->kvs[1].type = BN_GGUF_TYPE_ARRAY;
+        g->kvs[1].val.arr.type = BN_GGUF_TYPE_STRING;
+        g->kvs[1].val.arr.len = 0;
+        g->kvs[1].val.arr.data = NULL;
+
+        g->kvs[2].key = strdup("tokenizer.ggml.bos_token_id");
+        g->kvs[2].type = BN_GGUF_TYPE_UINT32;
+        g->kvs[2].val.u32 = 0;
+
+        g->kvs[3].key = strdup("tokenizer.ggml.eos_token_id");
+        g->kvs[3].type = BN_GGUF_TYPE_UINT32;
+        g->kvs[3].val.u32 = 1;
+
+        bn_tokenizer_t *t = bn_tokenizer_create(g);
+        assert(t == NULL);
+        bn_gguf_close(g);
+        printf("Reject zero-length token vocabulary: OK\n");
+    }
+
+    /* Zero-length merge array with valid tokens: should succeed */
+    {
+        static const char *const toks[] = { "A", "B", "C", "D" };
+        bn_gguf_t *g = (bn_gguf_t *)calloc(1, sizeof(*g));
+        assert(g != NULL);
+        g->fd = -1;
+        g->n_kv = 4;
+        g->kvs = (bn_gguf_kv_t *)calloc((size_t)g->n_kv, sizeof(g->kvs[0]));
+        assert(g->kvs != NULL);
+
+        char **tokens = (char **)calloc(4, sizeof(tokens[0]));
+        assert(tokens != NULL);
+        for (int i = 0; i < 4; i++) {
+            tokens[i] = strdup(toks[i]);
+            assert(tokens[i] != NULL);
+        }
+
+        g->kvs[0].key = strdup("tokenizer.ggml.tokens");
+        g->kvs[0].type = BN_GGUF_TYPE_ARRAY;
+        g->kvs[0].val.arr.type = BN_GGUF_TYPE_STRING;
+        g->kvs[0].val.arr.len = 4;
+        g->kvs[0].val.arr.data = tokens;
+
+        g->kvs[1].key = strdup("tokenizer.ggml.merges");
+        g->kvs[1].type = BN_GGUF_TYPE_ARRAY;
+        g->kvs[1].val.arr.type = BN_GGUF_TYPE_STRING;
+        g->kvs[1].val.arr.len = 0;
+        g->kvs[1].val.arr.data = NULL;
+
+        g->kvs[2].key = strdup("tokenizer.ggml.bos_token_id");
+        g->kvs[2].type = BN_GGUF_TYPE_UINT32;
+        g->kvs[2].val.u32 = 0;
+
+        g->kvs[3].key = strdup("tokenizer.ggml.eos_token_id");
+        g->kvs[3].type = BN_GGUF_TYPE_UINT32;
+        g->kvs[3].val.u32 = 1;
+
+        bn_tokenizer_t *t = bn_tokenizer_create(g);
+        assert(t != NULL);
+        bn_tokenizer_free(t);
+        bn_gguf_close(g);
+        printf("Accept zero-length merge array with valid tokens: OK\n");
+    }
+
     printf("\n=== Tokenizer metadata validation tests passed ===\n");
     return 0;
 }

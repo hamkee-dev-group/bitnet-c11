@@ -126,6 +126,7 @@ static int bn_utf8_to_cp(const char *s, int len, uint32_t *cp, int *advance) {
 static char *bn_bytes_to_gpt2(const char *input, int len, int *out_len) {
     bn_init_byte_tables();
     char *out = (char *)malloc((size_t)len * 3 + 1);
+    if (!out) { *out_len = 0; return NULL; }
     int pos = 0;
     for (int i = 0; i < len; i++) {
         uint32_t cp = byte_to_cp[(uint8_t)input[i]];
@@ -139,6 +140,7 @@ static char *bn_bytes_to_gpt2(const char *input, int len, int *out_len) {
 static char *bn_gpt2_to_bytes(const char *input, int len, int *out_len) {
     bn_init_byte_tables();
     char *out = (char *)malloc((size_t)len + 1);
+    if (!out) { *out_len = 0; return NULL; }
     int pos = 0;
     int i = 0;
     while (i < len) {
@@ -214,12 +216,20 @@ static uint64_t bn_hash_pair(const char *a, int alen, const char *b, int blen) {
     return h;
 }
 
-static void bn_ht_init(bn_tokenizer_t *t, int cap) {
+static int bn_ht_init(bn_tokenizer_t *t, int cap) {
+    if (cap <= 0) { t->ht_size = 0; return 0; }
     t->ht_size = cap;
     t->ht = (struct bn_ht_entry *)calloc((size_t)cap, sizeof(t->ht[0]));
     t->ht_buckets = (int *)malloc((size_t)cap * sizeof(int));
+    if (!t->ht || !t->ht_buckets) {
+        free(t->ht); t->ht = NULL;
+        free(t->ht_buckets); t->ht_buckets = NULL;
+        t->ht_size = 0;
+        return 0;
+    }
     for (int i = 0; i < cap; i++) t->ht_buckets[i] = -1;
     t->ht_count = 0;
+    return 1;
 }
 
 static void bn_ht_insert(bn_tokenizer_t *t, const char *key, int len, int val) {
@@ -235,6 +245,7 @@ static void bn_ht_insert(bn_tokenizer_t *t, const char *key, int len, int val) {
 }
 
 static int bn_ht_lookup(bn_tokenizer_t *t, const char *key, int len) {
+    if (t->ht_size == 0) return -1;
     uint64_t h = bn_hash_str(key, len);
     int bucket = (int)(h % (uint64_t)t->ht_size);
     for (int idx = t->ht_buckets[bucket]; idx >= 0; idx = t->ht[idx].next) {
@@ -246,12 +257,20 @@ static int bn_ht_lookup(bn_tokenizer_t *t, const char *key, int len) {
     return -1;
 }
 
-static void bn_mt_init(bn_tokenizer_t *t, int cap) {
+static int bn_mt_init(bn_tokenizer_t *t, int cap) {
+    if (cap <= 0) { t->mt_size = 0; return 0; }
     t->mt_size = cap;
     t->mt = (struct bn_mt_entry *)calloc((size_t)cap, sizeof(t->mt[0]));
     t->mt_buckets = (int *)malloc((size_t)cap * sizeof(int));
+    if (!t->mt || !t->mt_buckets) {
+        free(t->mt); t->mt = NULL;
+        free(t->mt_buckets); t->mt_buckets = NULL;
+        t->mt_size = 0;
+        return 0;
+    }
     for (int i = 0; i < cap; i++) t->mt_buckets[i] = -1;
     t->mt_count = 0;
+    return 1;
 }
 
 static void bn_mt_insert(bn_tokenizer_t *t, const char *a, int alen,
@@ -267,6 +286,7 @@ static void bn_mt_insert(bn_tokenizer_t *t, const char *a, int alen,
 
 static int bn_mt_lookup(bn_tokenizer_t *t, const char *a, int alen,
                          const char *b, int blen) {
+    if (t->mt_size == 0) return -1;
     uint64_t h = bn_hash_pair(a, alen, b, blen);
     int bucket = (int)(h % (uint64_t)t->mt_size);
     for (int idx = t->mt_buckets[bucket]; idx >= 0; idx = t->mt[idx].next) {
@@ -294,10 +314,13 @@ typedef struct {
     int cap;
 } bn_heap_t;
 
-static void bn_heap_push(bn_heap_t *h, bn_bigram_t bg) {
+static int bn_heap_push(bn_heap_t *h, bn_bigram_t bg) {
     if (h->size >= h->cap) {
-        h->cap = h->cap ? h->cap * 2 : 64;
-        h->data = (bn_bigram_t *)realloc(h->data, (size_t)h->cap * sizeof(bn_bigram_t));
+        int new_cap = h->cap ? h->cap * 2 : 64;
+        bn_bigram_t *tmp = (bn_bigram_t *)realloc(h->data, (size_t)new_cap * sizeof(bn_bigram_t));
+        if (!tmp) return 0;
+        h->data = tmp;
+        h->cap = new_cap;
     }
     int i = h->size++;
     h->data[i] = bg;
@@ -309,6 +332,7 @@ static void bn_heap_push(bn_heap_t *h, bn_bigram_t bg) {
         h->data[parent] = tmp;
         i = parent;
     }
+    return 1;
 }
 
 static bn_bigram_t bn_heap_pop(bn_heap_t *h) {
@@ -368,6 +392,7 @@ static int bn_bpe_encode(bn_tokenizer_t *t, const char *text, int text_len,
     }
 
     bn_symbol_t *syms = (bn_symbol_t *)malloc((size_t)n_chars * 2 * sizeof(bn_symbol_t));
+    if (!syms) return 0;
     int n_syms = n_chars;
     pos = 0;
     for (int i = 0; i < n_chars; i++) {
@@ -613,17 +638,38 @@ bn_tokenizer_t *bn_tokenizer_create(bn_gguf_t *g) {
     }
 
     t->n_vocab = (int)kv_tokens->val.arr.len;
+    if (t->n_vocab <= 0) {
+        fprintf(stderr, "tokenizer: token vocabulary is empty\n");
+        free(t);
+        return NULL;
+    }
     char **token_strs = (char **)kv_tokens->val.arr.data;
 
     t->vocab = (char **)malloc((size_t)t->n_vocab * sizeof(char *));
     t->vocab_len = (int *)malloc((size_t)t->n_vocab * sizeof(int));
+    if (!t->vocab || !t->vocab_len) {
+        free(t->vocab);
+        free(t->vocab_len);
+        free(t);
+        return NULL;
+    }
 
     int ht_cap = t->n_vocab * 4;
-    bn_ht_init(t, ht_cap);
+    if (!bn_ht_init(t, ht_cap)) {
+        free(t->vocab);
+        free(t->vocab_len);
+        free(t);
+        return NULL;
+    }
 
     for (int i = 0; i < t->n_vocab; i++) {
         int slen = (int)strlen(token_strs[i]);
         t->vocab[i] = (char *)malloc((size_t)slen + 1);
+        if (!t->vocab[i]) {
+            t->n_vocab = i;
+            bn_tokenizer_free(t);
+            return NULL;
+        }
         memcpy(t->vocab[i], token_strs[i], (size_t)slen + 1);
         t->vocab_len[i] = slen;
         bn_ht_insert(t, token_strs[i], slen, i);
@@ -648,9 +694,18 @@ bn_tokenizer_t *bn_tokenizer_create(bn_gguf_t *g) {
         t->n_merges = (int)kv_merges->val.arr.len;
         char **merge_strs = (char **)kv_merges->val.arr.data;
 
-        t->merges = (bn_merge_t *)malloc((size_t)t->n_merges * sizeof(bn_merge_t));
-        int mt_cap = t->n_merges * 4;
-        bn_mt_init(t, mt_cap);
+        if (t->n_merges > 0) {
+            t->merges = (bn_merge_t *)malloc((size_t)t->n_merges * sizeof(bn_merge_t));
+            if (!t->merges) {
+                bn_tokenizer_free(t);
+                return NULL;
+            }
+            int mt_cap = t->n_merges * 4;
+            if (!bn_mt_init(t, mt_cap)) {
+                bn_tokenizer_free(t);
+                return NULL;
+            }
+        }
 
         for (int i = 0; i < t->n_merges; i++) {
             char *s = merge_strs[i];
@@ -741,10 +796,12 @@ int bn_tokenize(bn_tokenizer_t *t, const char *text,
 
     int gpt2_len;
     char *gpt2_text = bn_bytes_to_gpt2(text, text_len, &gpt2_len);
+    if (!gpt2_text) return -1;
 
     int max_spans = gpt2_len + 1;
     if (max_spans < 16) max_spans = 16;
     bn_span_t *spans = (bn_span_t *)malloc((size_t)max_spans * sizeof(bn_span_t));
+    if (!spans) { free(gpt2_text); return -1; }
     int n_spans = bn_pre_tokenize(gpt2_text, gpt2_len, spans, max_spans);
 
     for (int i = 0; i < n_spans && n_out < max_tokens; i++) {
@@ -768,6 +825,7 @@ char *bn_detokenize(bn_tokenizer_t *t, const int *tokens, int n) {
     }
 
     char *gpt2 = (char *)malloc((size_t)total + 1);
+    if (!gpt2) return NULL;
     int pos = 0;
     for (int i = 0; i < n; i++) {
         int id = tokens[i];
@@ -794,6 +852,7 @@ const char *bn_token_text(bn_tokenizer_t *t, int id) {
     int tok_len = t->vocab_len[id];
     int out_len;
     char *dec = bn_gpt2_to_bytes(tok, tok_len, &out_len);
+    if (!dec) { decoded_buf[0] = '\0'; return decoded_buf; }
     if (out_len >= 256) out_len = 255;
     memcpy(decoded_buf, dec, (size_t)out_len);
     decoded_buf[out_len] = '\0';
