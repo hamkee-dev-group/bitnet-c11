@@ -168,12 +168,38 @@ static void test_quantize(void) {
     printf("  OK\n");
 }
 
+static void test_i16_overflow(void) {
+    printf("Test: i16 accumulator overflow (n_cols=4096, all +1 weights, acts=127)...\n");
+    int N = 4096;
+    int8_t *wvals = (int8_t *)malloc((size_t)N * sizeof(int8_t));
+    int8_t *acts  = (int8_t *)malloc((size_t)N * sizeof(int8_t));
+
+    for (int i = 0; i < N; i++) { wvals[i] = 1; acts[i] = 127; }
+
+    uint8_t *packed = pack_test_weights(wvals, 1, N);
+
+    float out_s;
+    bn_i2s_gemv_scalar(packed, acts, &out_s, 1, N);
+    printf("  Scalar: raw=%.0f\n", out_s);
+
+#if defined(__AVX2__)
+    float out_a;
+    bn_i2s_gemv_avx2(packed, acts, &out_a, 1, N);
+    printf("  AVX2:   raw=%.0f\n", out_a);
+    assert(fabsf(out_a - out_s) < 0.5f);
+#endif
+
+    free(wvals); free(acts); free(packed);
+    printf("  OK\n");
+}
+
 int main(void) {
     printf("=== Matmul Kernel Tests ===\n\n");
     test_basic();
     test_mixed();
     test_multirow();
     test_quantize();
+    test_i16_overflow();
     printf("\n=== All matmul tests passed ===\n");
     return 0;
 }

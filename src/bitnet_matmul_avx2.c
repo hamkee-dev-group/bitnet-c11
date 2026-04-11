@@ -63,6 +63,12 @@ void bn_i2s_gemv_avx2(const uint8_t *weights, const int8_t *acts,
                 accu32 = _mm256_add_epi16(accu32,
                     _mm256_add_epi16(xq8_2, xq8_3));
 
+                if (j == 15) {
+                    accu = _mm256_add_epi32(accu,
+                        _mm256_madd_epi16(accu32, one16));
+                    accu32 = _mm256_setzero_si256();
+                }
+
                 px += 32;
                 py += 128;
             }
@@ -100,6 +106,12 @@ void bn_i2s_gemv_avx2(const uint8_t *weights, const int8_t *acts,
                     _mm256_add_epi16(xq8_0, xq8_1));
                 accula = _mm256_add_epi16(accula,
                     _mm256_add_epi16(xq8_2, xq8_3));
+
+                if (j == 15) {
+                    accu = _mm256_add_epi32(accu,
+                        _mm256_madd_epi16(accula, one16));
+                    accula = _mm256_setzero_si256();
+                }
 
                 px += 32;
                 py += 128;
