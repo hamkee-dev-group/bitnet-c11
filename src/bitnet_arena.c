@@ -37,8 +37,14 @@ void *bn_arena_alloc(bn_arena_t *a, size_t size) {
     if (a == NULL) return NULL;
 
     size_t align = 64;
+
+    /* Detect overflow in alignment rounding: a->used + align - 1 */
+    if (a->used > SIZE_MAX - (align - 1))
+        return NULL;
     size_t offset = (a->used + align - 1) & ~(align - 1);
-    if (offset + size > a->size) {
+
+    /* Detect overflow in offset + size */
+    if (size > SIZE_MAX - offset || offset + size > a->size) {
         fprintf(stderr, "bn_arena: out of memory (need %zu, have %zu)\n",
                 offset + size, a->size);
         return NULL;
