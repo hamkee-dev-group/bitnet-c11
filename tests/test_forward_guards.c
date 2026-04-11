@@ -575,6 +575,50 @@ static void test_bitnet_sample_token_rejects_null_logits(void) {
     free_tiny_fixture(&fx);
 }
 
+static void test_bn_detokenize_rejects_null_tokenizer(void) {
+    int tokens[] = {0, 1};
+    printf("Test 18: bn_detokenize rejects NULL tokenizer... ");
+    assert(bn_detokenize(NULL, tokens, 2) == NULL);
+    printf("OK\n");
+}
+
+static void test_bitnet_detokenize_rejects_null_ctx(void) {
+    int tokens[] = {0};
+    printf("Test 19: bitnet_detokenize rejects NULL ctx... ");
+    assert(bitnet_detokenize(NULL, tokens, 1) == NULL);
+    printf("OK\n");
+}
+
+static void test_bitnet_detokenize_rejects_null_tokenizer(void) {
+    bitnet_ctx_t ctx;
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.tokenizer = NULL;
+    int tokens[] = {0};
+    printf("Test 20: bitnet_detokenize rejects NULL tokenizer in ctx... ");
+    assert(bitnet_detokenize(&ctx, tokens, 1) == NULL);
+    printf("OK\n");
+}
+
+static void test_bn_token_bos_rejects_null(void) {
+    printf("Test 21: bn_token_bos rejects NULL tokenizer... ");
+    assert(bn_token_bos(NULL) == -1);
+    printf("OK\n");
+}
+
+static void test_bn_token_eos_rejects_null(void) {
+    printf("Test 22: bn_token_eos rejects NULL tokenizer... ");
+    assert(bn_token_eos(NULL) == -1);
+    printf("OK\n");
+}
+
+static void test_bn_token_text_rejects_null(void) {
+    printf("Test 23: bn_token_text rejects NULL tokenizer... ");
+    const char *result = bn_token_text(NULL, 0);
+    assert(result != NULL);
+    assert(result[0] == '\0');
+    printf("OK\n");
+}
+
 static void test_bn_sample_growth_reuses_existing_buffer(void) {
     bn_sampler_t s;
     bn_sampler_init(&s, 1.0f, 0, 1.0f);
@@ -621,6 +665,12 @@ int main(void) {
     test_bitnet_sample_token_rejects_null_model();
     test_bitnet_sample_token_rejects_null_logits();
     test_bn_sample_growth_reuses_existing_buffer();
+    test_bn_detokenize_rejects_null_tokenizer();
+    test_bitnet_detokenize_rejects_null_ctx();
+    test_bitnet_detokenize_rejects_null_tokenizer();
+    test_bn_token_bos_rejects_null();
+    test_bn_token_eos_rejects_null();
+    test_bn_token_text_rejects_null();
 
     printf("\n=== All forward guard tests passed ===\n");
     return 0;

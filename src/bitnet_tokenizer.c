@@ -816,6 +816,7 @@ int bn_tokenize(bn_tokenizer_t *t, const char *text,
 }
 
 char *bn_detokenize(bn_tokenizer_t *t, const int *tokens, int n) {
+    if (!t) return NULL;
     int total = 0;
     for (int i = 0; i < n; i++) {
         int id = tokens[i];
@@ -842,10 +843,11 @@ char *bn_detokenize(bn_tokenizer_t *t, const int *tokens, int n) {
     return out;
 }
 
-int bn_token_bos(bn_tokenizer_t *t) { return t->bos_id; }
-int bn_token_eos(bn_tokenizer_t *t) { return t->eos_id; }
+int bn_token_bos(bn_tokenizer_t *t) { return t ? t->bos_id : -1; }
+int bn_token_eos(bn_tokenizer_t *t) { return t ? t->eos_id : -1; }
 
 const char *bn_token_text(bn_tokenizer_t *t, int id) {
+    if (!t) return "";
     if (id < 0 || id >= t->n_vocab) return "";
     static _Thread_local char decoded_buf[256];
     const char *tok = t->vocab[id];

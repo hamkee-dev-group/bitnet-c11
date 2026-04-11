@@ -641,6 +641,7 @@ int bitnet_tokenize(bitnet_ctx_t *ctx, const char *text,
 }
 
 char *bitnet_detokenize(bitnet_ctx_t *ctx, const int *tokens, int n) {
+    if (!ctx || !ctx->tokenizer) return NULL;
     return bn_detokenize(ctx->tokenizer, tokens, n);
 }
 
