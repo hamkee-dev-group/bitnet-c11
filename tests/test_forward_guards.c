@@ -7,6 +7,7 @@
 #include <string.h>
 #include <limits.h>
 #include <unistd.h>
+#include <fcntl.h>
 
 typedef struct {
     char *left;
@@ -761,6 +762,61 @@ static void free_ffn_norm_fixture(ffn_norm_fixture_t *fx) {
     free(fx->token_embd);
 }
 
+/* Declared in bitnet_sampler.c — not static, used for testing short reads. */
+extern void bn_rng_fill_from_fd(int fd, uint8_t *buf, size_t total);
+
+static void test_sampler_init_short_read_fills_all_state(void) {
+    printf("Test 25: Short /dev/urandom read fills all rng_state words... ");
+
+    /*
+     * Create a pipe and write only 5 bytes into it, then close the write end.
+     * bn_rng_fill_from_fd will read those 5 bytes, hit EOF, and must fall back
+     * to deterministic constants for the remaining 27 bytes (32 total).
+     */
+    int pipefd[2];
+    assert(pipe(pipefd) == 0);
+
+    const uint8_t partial_data[5] = {0xAA, 0xBB, 0xCC, 0xDD, 0xEE};
+    ssize_t w = write(pipefd[1], partial_data, sizeof(partial_data));
+    assert(w == (ssize_t)sizeof(partial_data));
+    close(pipefd[1]); /* EOF after 5 bytes */
+
+    uint64_t state[4];
+    memset(state, 0, sizeof(state));
+    bn_rng_fill_from_fd(pipefd[0], (uint8_t *)state, sizeof(state));
+    close(pipefd[0]);
+
+    /* Every state word must be non-zero (the partial data plus fallback
+     * constants guarantee this). */
+    for (int i = 0; i < 4; i++) {
+        assert(state[i] != 0);
+    }
+
+    /* Verify the first 5 bytes came from the pipe. */
+    const uint8_t *raw = (const uint8_t *)state;
+    assert(memcmp(raw, partial_data, sizeof(partial_data)) == 0);
+
+    /* Verify the remaining 27 bytes came from the fallback constants. */
+    static const uint64_t fallback[4] = {
+        0x12345678deadbeefULL, 0xfeedface01020304ULL,
+        0xabcdef0011223344ULL, 0x99887766aabbccddULL,
+    };
+    const uint8_t *fb = (const uint8_t *)fallback;
+    assert(memcmp(raw + 5, fb + 5, sizeof(state) - 5) == 0);
+
+    /* Also test the zero-byte (open failure) path: all words from fallback. */
+    uint64_t state2[4];
+    memset(state2, 0, sizeof(state2));
+    int pipefd2[2];
+    assert(pipe(pipefd2) == 0);
+    close(pipefd2[1]); /* immediate EOF */
+    bn_rng_fill_from_fd(pipefd2[0], (uint8_t *)state2, sizeof(state2));
+    close(pipefd2[0]);
+    assert(memcmp(state2, fallback, sizeof(state2)) == 0);
+
+    printf("OK\n");
+}
+
 static void test_ffn_sub_norm_uses_n_ff_dimension(void) {
     ffn_norm_fixture_t fx;
     init_ffn_norm_fixture(&fx, 4);
@@ -801,6 +857,7 @@ int main(void) {
     test_bn_token_bos_rejects_null();
     test_bn_token_eos_rejects_null();
     test_bn_token_text_rejects_null();
+    test_sampler_init_short_read_fills_all_state();
     test_ffn_sub_norm_uses_n_ff_dimension();
 
     printf("\n=== All forward guard tests passed ===\n");

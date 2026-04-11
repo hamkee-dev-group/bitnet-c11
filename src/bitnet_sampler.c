@@ -28,6 +28,26 @@ static float bn_rand_float(uint64_t *s) {
     return (float)(v >> 11) * 0x1.0p-53f;
 }
 
+static const uint64_t bn_rng_fallback[4] = {
+    0x12345678deadbeefULL,
+    0xfeedface01020304ULL,
+    0xabcdef0011223344ULL,
+    0x99887766aabbccddULL,
+};
+
+void bn_rng_fill_from_fd(int fd, uint8_t *buf, size_t total) {
+    size_t filled = 0;
+    while (filled < total) {
+        ssize_t r = read(fd, buf + filled, total - filled);
+        if (r <= 0) break;
+        filled += (size_t)r;
+    }
+    if (filled < total) {
+        const uint8_t *fb = (const uint8_t *)bn_rng_fallback;
+        memcpy(buf + filled, fb + filled, total - filled);
+    }
+}
+
 void bn_sampler_init(bn_sampler_t *s, float temp, int top_k, float top_p) {
     s->temperature = temp;
     s->top_k = top_k;
@@ -36,14 +56,10 @@ void bn_sampler_init(bn_sampler_t *s, float temp, int top_k, float top_p) {
     s->pairs_cap = 0;
     int fd = open("/dev/urandom", O_RDONLY);
     if (fd >= 0) {
-        ssize_t r = read(fd, s->rng_state, sizeof(s->rng_state));
-        (void)r;
+        bn_rng_fill_from_fd(fd, (uint8_t *)s->rng_state, sizeof(s->rng_state));
         close(fd);
     } else {
-        s->rng_state[0] = 0x12345678deadbeefULL;
-        s->rng_state[1] = 0xfeedface01020304ULL;
-        s->rng_state[2] = 0xabcdef0011223344ULL;
-        s->rng_state[3] = 0x99887766aabbccddULL;
+        memcpy(s->rng_state, bn_rng_fallback, sizeof(s->rng_state));
     }
 }
 
