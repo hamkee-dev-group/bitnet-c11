@@ -634,6 +634,33 @@ static void test_bn_token_text_rejects_null(void) {
     printf("OK\n");
 }
 
+static void test_bn_detokenize_rejects_null_tokens(void) {
+    tiny_fixture_t fx;
+    init_tiny_fixture(&fx, 4);
+    printf("Test 24: bn_detokenize rejects NULL tokens with n>0... ");
+    assert(bn_detokenize(&fx.tokenizer, NULL, 3) == NULL);
+    printf("OK\n");
+}
+
+static void test_bitnet_detokenize_rejects_null_tokens(void) {
+    tiny_fixture_t fx;
+    init_tiny_fixture(&fx, 4);
+    printf("Test 25: bitnet_detokenize rejects NULL tokens with n>0... ");
+    assert(bitnet_detokenize(&fx.ctx, NULL, 3) == NULL);
+    printf("OK\n");
+}
+
+static void test_bn_token_text_rejects_invalid_id(void) {
+    tiny_fixture_t fx;
+    init_tiny_fixture(&fx, 4);
+    printf("Test 26: bn_token_text returns empty for invalid id... ");
+    const char *r1 = bn_token_text(&fx.tokenizer, -1);
+    assert(r1 != NULL && r1[0] == '\0');
+    const char *r2 = bn_token_text(&fx.tokenizer, 999);
+    assert(r2 != NULL && r2[0] == '\0');
+    printf("OK\n");
+}
+
 static void test_bn_sample_growth_reuses_existing_buffer(void) {
     bn_sampler_t s;
     bn_sampler_init(&s, 1.0f, 0, 1.0f);
@@ -857,6 +884,9 @@ int main(void) {
     test_bn_token_bos_rejects_null();
     test_bn_token_eos_rejects_null();
     test_bn_token_text_rejects_null();
+    test_bn_detokenize_rejects_null_tokens();
+    test_bitnet_detokenize_rejects_null_tokens();
+    test_bn_token_text_rejects_invalid_id();
     test_sampler_init_short_read_fills_all_state();
     test_ffn_sub_norm_uses_n_ff_dimension();
 

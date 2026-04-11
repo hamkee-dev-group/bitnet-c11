@@ -109,6 +109,27 @@ int main(void) {
     free(decoded);
     printf("  OK\n");
 
+    printf("Test 5: bn_detokenize returns NULL for NULL tokens with n>0...\n");
+    assert(bn_detokenize(tokenizer, NULL, 3) == NULL);
+    printf("  OK\n");
+
+    printf("Test 6: bn_detokenize returns empty string for zero-length tokens...\n");
+    char *empty = bn_detokenize(tokenizer, NULL, 0);
+    assert(empty != NULL);
+    assert(empty[0] == '\0');
+    free(empty);
+    printf("  OK\n");
+
+    printf("Test 7: bn_token_text returns empty for out-of-range id...\n");
+    const char *oob = bn_token_text(tokenizer, 9999);
+    assert(oob != NULL && oob[0] == '\0');
+    printf("  OK\n");
+
+    printf("Test 8: bn_token_bos/eos return -1 for NULL tokenizer...\n");
+    assert(bn_token_bos(NULL) == -1);
+    assert(bn_token_eos(NULL) == -1);
+    printf("  OK\n");
+
     bn_tokenizer_free(tokenizer);
     bn_gguf_close(g);
 

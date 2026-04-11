@@ -817,6 +817,7 @@ int bn_tokenize(bn_tokenizer_t *t, const char *text,
 
 char *bn_detokenize(bn_tokenizer_t *t, const int *tokens, int n) {
     if (!t) return NULL;
+    if (n > 0 && !tokens) return NULL;
     int total = 0;
     for (int i = 0; i < n; i++) {
         int id = tokens[i];
