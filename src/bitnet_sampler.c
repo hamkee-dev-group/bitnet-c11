@@ -99,7 +99,13 @@ int bn_sample(bn_sampler_t *s, float *logits, int n_vocab) {
 
     if (s->pairs_cap < n_vocab) {
         void *new_buf = malloc((size_t)n_vocab * sizeof(bn_logit_pair_t));
-        if (!new_buf) return -1;
+        if (!new_buf) {
+            int best = 0;
+            for (int i = 1; i < n_vocab; i++) {
+                if (logits[i] > logits[best]) best = i;
+            }
+            return best;
+        }
         free(s->pairs_buf);
         s->pairs_buf = new_buf;
         s->pairs_cap = n_vocab;

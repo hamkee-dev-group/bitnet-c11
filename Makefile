@@ -69,13 +69,16 @@ test_arena: $(OBJS) tests/test_arena.c
 test_forward_guards: $(OBJS) tests/test_forward_guards.c
 	$(CC) $(CFLAGS) -o $@ tests/test_forward_guards.c $(OBJS) $(LDFLAGS)
 
+test_sampler_oom: $(OBJS) tests/test_sampler_oom.c
+	$(CC) $(CFLAGS) -o $@ tests/test_sampler_oom.c $(OBJS) $(LDFLAGS)
+
 test_vs_reference: $(OBJS) tests/test_vs_reference.c
 	$(CC) $(CFLAGS) -o $@ tests/test_vs_reference.c $(OBJS) $(LDFLAGS)
 
 test_cli_args: tests/test_cli_args.c bitnet_cli bitnet_bench
 	$(CC) $(CFLAGS) -o $@ tests/test_cli_args.c $(LDFLAGS)
 
-test: test_gguf test_matmul test_thread_create_failures test_quantizer test_tokenizer_utf8 test_tokenizer_metadata test_tokenizer_threads test_arena test_forward_guards test_cli_args
+test: test_gguf test_matmul test_thread_create_failures test_quantizer test_tokenizer_utf8 test_tokenizer_metadata test_tokenizer_threads test_arena test_forward_guards test_sampler_oom test_cli_args
 	@echo "=== Running all tests ==="
 	./test_matmul
 	@echo ""
@@ -95,10 +98,12 @@ test: test_gguf test_matmul test_thread_create_failures test_quantizer test_toke
 	@echo ""
 	./test_forward_guards
 	@echo ""
+	./test_sampler_oom
+	@echo ""
 	./test_cli_args
 
 bench: bitnet_bench
 	./bitnet_bench -m $(BITNET_MODEL) -t 4
 
 clean:
-	rm -f $(OBJS) bitnet_cli bitnet_bench test_gguf test_matmul test_thread_create_failures test_quantizer test_tokenizer test_tokenizer_utf8 test_tokenizer_metadata test_tokenizer_threads test_arena test_forward_guards test_vs_reference test_cli_args
+	rm -f $(OBJS) bitnet_cli bitnet_bench test_gguf test_matmul test_thread_create_failures test_quantizer test_tokenizer test_tokenizer_utf8 test_tokenizer_metadata test_tokenizer_threads test_arena test_forward_guards test_sampler_oom test_vs_reference test_cli_args
