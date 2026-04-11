@@ -5,9 +5,22 @@
 #include <string.h>
 #include <stdio.h>
 
+/*
+ * Creates a zero-initialized arena backed by a contiguous heap allocation.
+ *
+ * Parameters:
+ *   size - Number of bytes to reserve for arena allocations.
+ *
+ * Returns:
+ *   A new arena. If allocation fails, the returned arena has a NULL base
+ *   pointer, a size of 0, and used set to 0.
+ */
 bn_arena_t bn_arena_create(size_t size) {
     bn_arena_t a;
-    a.base = (uint8_t *)calloc(1, size);
+    a.base = NULL;
+    if (size > 0 && posix_memalign((void **)&a.base, 64, size) == 0) {
+        memset(a.base, 0, size);
+    }
     a.size = a.base ? size : 0;
     a.used = 0;
     return a;
@@ -21,6 +34,8 @@ void bn_arena_free(bn_arena_t *a) {
 }
 
 void *bn_arena_alloc(bn_arena_t *a, size_t size) {
+    if (a == NULL) return NULL;
+
     size_t align = 64;
     size_t offset = (a->used + align - 1) & ~(align - 1);
     if (offset + size > a->size) {

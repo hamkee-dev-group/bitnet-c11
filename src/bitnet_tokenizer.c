@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include "bitnet.h"
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -8,11 +9,28 @@
 
 static uint32_t byte_to_cp[256];
 static uint8_t  cp_to_byte_map[512];
-static int      byte_tables_init = 0;
+static pthread_once_t byte_tables_once = PTHREAD_ONCE_INIT;
 
-static void bn_init_byte_tables(void) {
-    if (byte_tables_init) return;
-    byte_tables_init = 1;
+static const char *bn_gguf_type_name(uint32_t type) {
+    switch (type) {
+    case BN_GGUF_TYPE_UINT8:   return "uint8";
+    case BN_GGUF_TYPE_INT8:    return "int8";
+    case BN_GGUF_TYPE_UINT16:  return "uint16";
+    case BN_GGUF_TYPE_INT16:   return "int16";
+    case BN_GGUF_TYPE_UINT32:  return "uint32";
+    case BN_GGUF_TYPE_INT32:   return "int32";
+    case BN_GGUF_TYPE_FLOAT32: return "float32";
+    case BN_GGUF_TYPE_BOOL:    return "bool";
+    case BN_GGUF_TYPE_STRING:  return "string";
+    case BN_GGUF_TYPE_ARRAY:   return "array";
+    case BN_GGUF_TYPE_UINT64:  return "uint64";
+    case BN_GGUF_TYPE_INT64:   return "int64";
+    case BN_GGUF_TYPE_FLOAT64: return "float64";
+    default:                   return "unknown";
+    }
+}
+
+static void bn_init_byte_tables_once(void) {
     memset(cp_to_byte_map, 0, sizeof(cp_to_byte_map));
 
     int n = 0;
@@ -26,6 +44,12 @@ static void bn_init_byte_tables(void) {
             n++;
         }
         cp_to_byte_map[byte_to_cp[b]] = (uint8_t)b;
+    }
+}
+
+static void bn_init_byte_tables(void) {
+    if (pthread_once(&byte_tables_once, bn_init_byte_tables_once) != 0) {
+        abort();
     }
 }
 
@@ -50,25 +74,53 @@ static int bn_cp_to_utf8(uint32_t cp, char *out) {
     return 4;
 }
 
-static uint32_t bn_utf8_to_cp(const char *s, int *advance) {
+static int bn_is_utf8_cont(uint8_t c) {
+    return (c & 0xC0) == 0x80;
+}
+
+static int bn_utf8_to_cp(const char *s, int len, uint32_t *cp, int *advance) {
     uint8_t c = (uint8_t)s[0];
     if (c < 0x80) {
+        *cp = c;
         *advance = 1;
-        return c;
-    } else if (c < 0xE0) {
+        return 1;
+    } else if (c >= 0xC2 && c < 0xE0) {
+        if (len < 2 || !bn_is_utf8_cont((uint8_t)s[1])) return 0;
+        *cp = ((uint32_t)(c & 0x1F) << 6) | ((uint32_t)(s[1] & 0x3F));
         *advance = 2;
-        return ((uint32_t)(c & 0x1F) << 6) | ((uint32_t)(s[1] & 0x3F));
+        return 1;
     } else if (c < 0xF0) {
+        uint8_t c1;
+        if (len < 3 ||
+            !bn_is_utf8_cont((uint8_t)s[1]) ||
+            !bn_is_utf8_cont((uint8_t)s[2])) {
+            return 0;
+        }
+        c1 = (uint8_t)s[1];
+        if ((c == 0xE0 && c1 < 0xA0) || (c == 0xED && c1 >= 0xA0)) return 0;
+        *cp = ((uint32_t)(c & 0x0F) << 12) |
+              ((uint32_t)(s[1] & 0x3F) << 6) |
+              ((uint32_t)(s[2] & 0x3F));
         *advance = 3;
-        return ((uint32_t)(c & 0x0F) << 12) |
-               ((uint32_t)(s[1] & 0x3F) << 6) |
-               ((uint32_t)(s[2] & 0x3F));
+        return 1;
     }
+    if (c >= 0xF5) return 0;
+    if (len < 4 ||
+        !bn_is_utf8_cont((uint8_t)s[1]) ||
+        !bn_is_utf8_cont((uint8_t)s[2]) ||
+        !bn_is_utf8_cont((uint8_t)s[3])) {
+        return 0;
+    }
+    if ((c == 0xF0 && (uint8_t)s[1] < 0x90) ||
+        (c == 0xF4 && (uint8_t)s[1] >= 0x90)) {
+        return 0;
+    }
+    *cp = ((uint32_t)(c & 0x07) << 18) |
+          ((uint32_t)(s[1] & 0x3F) << 12) |
+          ((uint32_t)(s[2] & 0x3F) << 6) |
+          ((uint32_t)(s[3] & 0x3F));
     *advance = 4;
-    return ((uint32_t)(c & 0x07) << 18) |
-           ((uint32_t)(s[1] & 0x3F) << 12) |
-           ((uint32_t)(s[2] & 0x3F) << 6) |
-           ((uint32_t)(s[3] & 0x3F));
+    return 1;
 }
 
 static char *bn_bytes_to_gpt2(const char *input, int len, int *out_len) {
@@ -91,7 +143,11 @@ static char *bn_gpt2_to_bytes(const char *input, int len, int *out_len) {
     int i = 0;
     while (i < len) {
         int adv;
-        uint32_t cp = bn_utf8_to_cp(input + i, &adv);
+        uint32_t cp;
+        if (!bn_utf8_to_cp(input + i, len - i, &cp, &adv)) {
+            out[pos++] = input[i++];
+            continue;
+        }
         if (cp < 512) {
             out[pos++] = (char)cp_to_byte_map[cp];
         } else {
@@ -285,14 +341,10 @@ static int bn_bpe_encode(bn_tokenizer_t *t, const char *text, int text_len,
     if (text_len == 0) return 0;
 
     int n_chars = 0;
-    int char_offsets[4096];
-    int char_lens[4096];
     int pos = 0;
-    while (pos < text_len && n_chars < 4096) {
+    while (pos < text_len) {
         int clen = bn_utf8_len((uint8_t)text[pos]);
         if (pos + clen > text_len) break;
-        char_offsets[n_chars] = pos;
-        char_lens[n_chars] = clen;
         n_chars++;
         pos += clen;
     }
@@ -317,11 +369,14 @@ static int bn_bpe_encode(bn_tokenizer_t *t, const char *text, int text_len,
 
     bn_symbol_t *syms = (bn_symbol_t *)malloc((size_t)n_chars * 2 * sizeof(bn_symbol_t));
     int n_syms = n_chars;
+    pos = 0;
     for (int i = 0; i < n_chars; i++) {
-        syms[i].text = text + char_offsets[i];
-        syms[i].len  = char_lens[i];
+        int clen = bn_utf8_len((uint8_t)text[pos]);
+        syms[i].text = text + pos;
+        syms[i].len  = clen;
         syms[i].prev = i - 1;
         syms[i].next = (i + 1 < n_chars) ? i + 1 : -1;
+        pos += clen;
     }
 
     bn_heap_t heap = {0};
@@ -372,17 +427,12 @@ static int bn_bpe_encode(bn_tokenizer_t *t, const char *text, int text_len,
     }
 
     int n_out = 0;
-    int cur = 0;
-    while (cur >= 0 && syms[cur].len == 0 && cur < n_syms) cur++;
+    int cur = -1;
     for (int i = 0; i < n_syms; i++) {
         if (syms[i].len > 0 && (i == 0 || syms[i].prev < 0 || syms[syms[i].prev].len == 0)) {
             cur = i;
             break;
         }
-    }
-    cur = -1;
-    for (int i = 0; i < n_syms; i++) {
-        if (syms[i].len > 0) { cur = i; break; }
     }
 
     while (cur >= 0 && n_out < max_out) {
@@ -554,6 +604,13 @@ bn_tokenizer_t *bn_tokenizer_create(bn_gguf_t *g) {
         free(t);
         return NULL;
     }
+    if (kv_tokens->val.arr.type != BN_GGUF_TYPE_STRING) {
+        fprintf(stderr,
+                "tokenizer: tokenizer.ggml.tokens must be an array of string, got array of %s\n",
+                bn_gguf_type_name(kv_tokens->val.arr.type));
+        free(t);
+        return NULL;
+    }
 
     t->n_vocab = (int)kv_tokens->val.arr.len;
     char **token_strs = (char **)kv_tokens->val.arr.data;
@@ -573,6 +630,20 @@ bn_tokenizer_t *bn_tokenizer_create(bn_gguf_t *g) {
     }
 
     bn_gguf_kv_t *kv_merges = bn_gguf_find_kv(g, "tokenizer.ggml.merges");
+    if (kv_merges && kv_merges->type != BN_GGUF_TYPE_ARRAY) {
+        fprintf(stderr,
+                "tokenizer: tokenizer.ggml.merges must be an array of string, got %s\n",
+                bn_gguf_type_name(kv_merges->type));
+        bn_tokenizer_free(t);
+        return NULL;
+    }
+    if (kv_merges && kv_merges->val.arr.type != BN_GGUF_TYPE_STRING) {
+        fprintf(stderr,
+                "tokenizer: tokenizer.ggml.merges must be an array of string, got array of %s\n",
+                bn_gguf_type_name(kv_merges->val.arr.type));
+        bn_tokenizer_free(t);
+        return NULL;
+    }
     if (kv_merges && kv_merges->type == BN_GGUF_TYPE_ARRAY) {
         t->n_merges = (int)kv_merges->val.arr.len;
         char **merge_strs = (char **)kv_merges->val.arr.data;
@@ -603,6 +674,20 @@ bn_tokenizer_t *bn_tokenizer_create(bn_gguf_t *g) {
 
     bn_gguf_kv_t *kv_bos = bn_gguf_find_kv(g, "tokenizer.ggml.bos_token_id");
     bn_gguf_kv_t *kv_eos = bn_gguf_find_kv(g, "tokenizer.ggml.eos_token_id");
+    if (kv_bos && kv_bos->type != BN_GGUF_TYPE_UINT32) {
+        fprintf(stderr,
+                "tokenizer: tokenizer.ggml.bos_token_id must have type uint32, got %s\n",
+                bn_gguf_type_name(kv_bos->type));
+        bn_tokenizer_free(t);
+        return NULL;
+    }
+    if (kv_eos && kv_eos->type != BN_GGUF_TYPE_UINT32) {
+        fprintf(stderr,
+                "tokenizer: tokenizer.ggml.eos_token_id must have type uint32, got %s\n",
+                bn_gguf_type_name(kv_eos->type));
+        bn_tokenizer_free(t);
+        return NULL;
+    }
     t->bos_id = kv_bos ? (int)kv_bos->val.u32 : 128000;
     t->eos_id = kv_eos ? (int)kv_eos->val.u32 : 128001;
 
@@ -632,6 +717,23 @@ void bn_tokenizer_free(bn_tokenizer_t *t) {
 int bn_tokenize(bn_tokenizer_t *t, const char *text,
                 int *tokens, int max_tokens)
 {
+    if (!t) {
+        fprintf(stderr, "tokenize: tokenizer is NULL\n");
+        return -1;
+    }
+    if (!text) {
+        fprintf(stderr, "tokenize: text is NULL\n");
+        return -1;
+    }
+    if (max_tokens < 0) {
+        fprintf(stderr, "tokenize: max_tokens must be >= 0\n");
+        return -1;
+    }
+    if (max_tokens > 0 && !tokens) {
+        fprintf(stderr, "tokenize: tokens is NULL with positive capacity\n");
+        return -1;
+    }
+
     int text_len = (int)strlen(text);
     int n_out = 0;
 

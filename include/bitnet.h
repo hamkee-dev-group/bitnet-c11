@@ -106,11 +106,22 @@ typedef struct bn_tokenizer bn_tokenizer_t;
 
 bn_tokenizer_t *bn_tokenizer_create(bn_gguf_t *g);
 void            bn_tokenizer_free(bn_tokenizer_t *t);
+/* Tokenizes `text` into the caller-owned `tokens` buffer and returns the
+ * number of token IDs written, up to `max_tokens`. Returns -1 on invalid
+ * arguments, including NULL `text`, negative `max_tokens`, or NULL `tokens`
+ * with positive capacity. The tokenizer does not retain ownership of either
+ * input pointer after the call returns. */
 int             bn_tokenize(bn_tokenizer_t *t, const char *text,
                             int *tokens, int max_tokens);
+/* Returns a newly allocated UTF-8 string for the provided token IDs. The
+ * caller owns the returned buffer and must free it. Token IDs outside the
+ * tokenizer vocabulary are ignored. */
 char           *bn_detokenize(bn_tokenizer_t *t, const int *tokens, int n);
 int             bn_token_bos(bn_tokenizer_t *t);
 int             bn_token_eos(bn_tokenizer_t *t);
+/* Returns a pointer to a thread-local decoded token string. The pointer
+ * remains valid only until the next `bn_token_text()` call on the same
+ * thread. Token IDs outside the tokenizer vocabulary return `""`. */
 const char     *bn_token_text(bn_tokenizer_t *t, int id);
 
 void bn_quantize_acts(const float *src, int8_t *dst, int n,
@@ -230,6 +241,8 @@ bitnet_params_t  bitnet_params_default(void);
 bitnet_ctx_t    *bitnet_ctx_new(bitnet_model_t *model, bitnet_params_t params);
 void             bitnet_ctx_free(bitnet_ctx_t *ctx);
 
+/* Returns -1 on invalid arguments. This wrapper rejects NULL `ctx` or
+ * tokenizer state, and otherwise follows `bn_tokenize()` argument rules. */
 int  bitnet_tokenize(bitnet_ctx_t *ctx, const char *text,
                      int *tokens, int max_tokens);
 char *bitnet_detokenize(bitnet_ctx_t *ctx, const int *tokens, int n);
@@ -239,6 +252,7 @@ float *bitnet_forward(bitnet_ctx_t *ctx, const int *tokens, int n_tokens,
 
 int bitnet_sample_token(bitnet_ctx_t *ctx, float *logits);
 
+/* Returns 0 without sampling when n_prompt <= 0. */
 int bitnet_generate(bitnet_ctx_t *ctx, const int *prompt, int n_prompt,
                     int n_predict,
                     void (*callback)(int token, const char *text, void *ud),
