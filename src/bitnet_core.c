@@ -527,7 +527,7 @@ bitnet_model_t *bitnet_model_load(const char *path) {
         LOAD_F32(m->layers[l].attn_norm, "blk.%d.attn_norm.weight", m->n_embd, l);
         LOAD_F32(m->layers[l].attn_sub_norm, "blk.%d.attn_sub_norm.weight", m->n_embd, l);
         LOAD_F32(m->layers[l].ffn_norm, "blk.%d.ffn_norm.weight", m->n_embd, l);
-        LOAD_F32(m->layers[l].ffn_sub_norm, "blk.%d.ffn_sub_norm.weight", m->n_embd, l);
+        LOAD_F32(m->layers[l].ffn_sub_norm, "blk.%d.ffn_sub_norm.weight", m->n_ff, l);
 
         LOAD_I2S(m->layers[l].attn_q, m->layers[l].attn_q_wscale,
                  m->layers[l].attn_q_scale,

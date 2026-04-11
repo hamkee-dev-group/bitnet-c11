@@ -73,6 +73,20 @@ typedef struct {
     float *v_cache_buf;
 } cache_guard_fixture_t;
 
+typedef struct {
+    bitnet_model_t model;
+    bitnet_ctx_t ctx;
+    float *token_embd;
+    float *output_norm;
+    float *ffn_sub_norm;
+    float *logits_buf;
+    uint8_t *zero_embd_embd;
+    uint8_t *zero_ff_embd;
+    uint8_t *zero_embd_ff;
+    float *k_cache_buf;
+    float *v_cache_buf;
+} ffn_norm_fixture_t;
+
 static uint8_t *pack_test_weights(const int8_t *vals, int n_rows, int n_cols) {
     int row_bytes = n_cols / 4;
     uint8_t *packed = (uint8_t *)calloc(1, (size_t)n_rows * row_bytes + 32);
@@ -645,6 +659,122 @@ static void test_bn_sample_growth_reuses_existing_buffer(void) {
     free(s.pairs_buf);
 }
 
+static void init_ffn_norm_fixture(ffn_norm_fixture_t *fx, int n_ctx) {
+    const int n_vocab = 3;
+    const int n_embd = 128;
+    const int n_ff = 256;
+    const int kv_dim = n_embd;
+    const int cache_floats = n_ctx * kv_dim;
+
+    memset(fx, 0, sizeof(*fx));
+
+    fx->token_embd = (float *)calloc((size_t)n_vocab * n_embd, sizeof(float));
+    fx->output_norm = (float *)calloc((size_t)n_embd, sizeof(float));
+    fx->ffn_sub_norm = (float *)calloc((size_t)n_ff, sizeof(float));
+    fx->logits_buf = (float *)calloc((size_t)n_vocab, sizeof(float));
+    fx->model.layers = calloc(1, sizeof(fx->model.layers[0]));
+    fx->k_cache_buf = (float *)calloc((size_t)cache_floats, sizeof(float));
+    fx->v_cache_buf = (float *)calloc((size_t)cache_floats, sizeof(float));
+    assert(fx->token_embd && fx->output_norm && fx->ffn_sub_norm);
+    assert(fx->logits_buf && fx->model.layers);
+    assert(fx->k_cache_buf && fx->v_cache_buf);
+
+    for (int i = 0; i < n_vocab * n_embd; i++) fx->token_embd[i] = 1.0f;
+    for (int i = 0; i < n_embd; i++) fx->output_norm[i] = 1.0f;
+    for (int i = 0; i < n_ff; i++) fx->ffn_sub_norm[i] = 1.0f;
+
+    int8_t *zeros_ee = (int8_t *)calloc((size_t)n_embd * n_embd, sizeof(int8_t));
+    int8_t *zeros_fe = (int8_t *)calloc((size_t)n_ff * n_embd, sizeof(int8_t));
+    int8_t *zeros_ef = (int8_t *)calloc((size_t)n_embd * n_ff, sizeof(int8_t));
+    assert(zeros_ee && zeros_fe && zeros_ef);
+    fx->zero_embd_embd = pack_test_weights(zeros_ee, n_embd, n_embd);
+    fx->zero_ff_embd = pack_test_weights(zeros_fe, n_ff, n_embd);
+    fx->zero_embd_ff = pack_test_weights(zeros_ef, n_embd, n_ff);
+    free(zeros_ee);
+    free(zeros_fe);
+    free(zeros_ef);
+
+    fx->model.n_vocab = n_vocab;
+    fx->model.n_embd = n_embd;
+    fx->model.n_layer = 1;
+    fx->model.n_head = 1;
+    fx->model.n_head_kv = 1;
+    fx->model.n_ff = n_ff;
+    fx->model.n_ctx = n_ctx;
+    fx->model.n_embd_head = n_embd;
+    fx->model.rope_freq_base = 10000.0f;
+    fx->model.rms_norm_eps = 1e-5f;
+    fx->model.token_embd = fx->token_embd;
+    fx->model.output_norm = fx->output_norm;
+    fx->model.output = NULL;
+    fx->model.output_is_i2s = false;
+
+    fx->model.layers[0].attn_norm = fx->output_norm;
+    fx->model.layers[0].attn_q = fx->zero_embd_embd;
+    fx->model.layers[0].attn_k = fx->zero_embd_embd;
+    fx->model.layers[0].attn_v = fx->zero_embd_embd;
+    fx->model.layers[0].attn_q_scale = 1.0f;
+    fx->model.layers[0].attn_k_scale = 1.0f;
+    fx->model.layers[0].attn_v_scale = 1.0f;
+    fx->model.layers[0].attn_sub_norm = fx->output_norm;
+    fx->model.layers[0].attn_output = fx->zero_embd_embd;
+    fx->model.layers[0].attn_output_scale = 1.0f;
+    fx->model.layers[0].ffn_norm = fx->output_norm;
+    fx->model.layers[0].ffn_gate = fx->zero_ff_embd;
+    fx->model.layers[0].ffn_up = fx->zero_ff_embd;
+    fx->model.layers[0].ffn_gate_scale = 1.0f;
+    fx->model.layers[0].ffn_up_scale = 1.0f;
+    fx->model.layers[0].ffn_sub_norm = fx->ffn_sub_norm;
+    fx->model.layers[0].ffn_down = fx->zero_embd_ff;
+    fx->model.layers[0].ffn_down_scale = 1.0f;
+    fx->model.layers[0].attn_q_wscale = 1.0f;
+    fx->model.layers[0].attn_k_wscale = 1.0f;
+    fx->model.layers[0].attn_v_wscale = 1.0f;
+    fx->model.layers[0].attn_output_wscale = 1.0f;
+    fx->model.layers[0].ffn_gate_wscale = 1.0f;
+    fx->model.layers[0].ffn_up_wscale = 1.0f;
+    fx->model.layers[0].ffn_down_wscale = 1.0f;
+
+    fx->ctx.model = &fx->model;
+    fx->ctx.n_ctx = n_ctx;
+    fx->ctx.n_threads = 1;
+    fx->ctx.gemv = bn_i2s_gemv_scalar;
+    fx->ctx.logits_buf = fx->logits_buf;
+    fx->ctx.logits_cap = n_vocab;
+    fx->ctx.k_cache = fx->k_cache_buf;
+    fx->ctx.v_cache = fx->v_cache_buf;
+    fx->ctx.scratch = bn_arena_create(1u << 20);
+    assert(fx->ctx.scratch.base);
+}
+
+static void free_ffn_norm_fixture(ffn_norm_fixture_t *fx) {
+    bn_arena_free(&fx->ctx.scratch);
+    free(fx->model.layers);
+    free(fx->k_cache_buf);
+    free(fx->v_cache_buf);
+    free(fx->zero_embd_embd);
+    free(fx->zero_ff_embd);
+    free(fx->zero_embd_ff);
+    free(fx->ffn_sub_norm);
+    free(fx->logits_buf);
+    free(fx->output_norm);
+    free(fx->token_embd);
+}
+
+static void test_ffn_sub_norm_uses_n_ff_dimension(void) {
+    ffn_norm_fixture_t fx;
+    init_ffn_norm_fixture(&fx, 4);
+
+    int token = 0;
+    float *logits = bitnet_forward(&fx.ctx, &token, 1, false);
+
+    printf("Test 24: ffn_sub_norm indexed with n_ff dimension (n_ff != n_embd)... ");
+    assert(logits != NULL);
+    printf("OK\n");
+
+    free_ffn_norm_fixture(&fx);
+}
+
 int main(void) {
     printf("=== Forward Guard Tests ===\n\n");
 
@@ -671,6 +801,7 @@ int main(void) {
     test_bn_token_bos_rejects_null();
     test_bn_token_eos_rejects_null();
     test_bn_token_text_rejects_null();
+    test_ffn_sub_norm_uses_n_ff_dimension();
 
     printf("\n=== All forward guard tests passed ===\n");
     return 0;
