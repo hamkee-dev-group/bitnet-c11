@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <limits.h>
 #include <unistd.h>
 
 typedef struct {
@@ -521,6 +522,85 @@ static void test_generate_empty_prompt_returns_zero(void) {
     free_tiny_fixture(&fx);
 }
 
+static void test_bn_sample_rejects_null_sampler(void) {
+    float logits[] = {1.0f, 2.0f};
+    printf("Test 11: bn_sample rejects NULL sampler... ");
+    assert(bn_sample(NULL, logits, 2) == -1);
+    printf("OK\n");
+}
+
+static void test_bn_sample_rejects_null_logits(void) {
+    bn_sampler_t s;
+    bn_sampler_init(&s, 0.0f, 1, 1.0f);
+    printf("Test 12: bn_sample rejects NULL logits... ");
+    assert(bn_sample(&s, NULL, 2) == -1);
+    printf("OK\n");
+    free(s.pairs_buf);
+}
+
+static void test_bn_sample_rejects_non_positive_vocab(void) {
+    bn_sampler_t s;
+    bn_sampler_init(&s, 0.0f, 1, 1.0f);
+    float logits[] = {1.0f};
+    printf("Test 13: bn_sample rejects n_vocab <= 0... ");
+    assert(bn_sample(&s, logits, 0) == -1);
+    assert(bn_sample(&s, logits, -5) == -1);
+    printf("OK\n");
+    free(s.pairs_buf);
+}
+
+static void test_bitnet_sample_token_rejects_null_ctx(void) {
+    float logits[] = {1.0f};
+    printf("Test 14: bitnet_sample_token rejects NULL ctx... ");
+    assert(bitnet_sample_token(NULL, logits) == -1);
+    printf("OK\n");
+}
+
+static void test_bitnet_sample_token_rejects_null_model(void) {
+    bitnet_ctx_t ctx;
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.model = NULL;
+    float logits[] = {1.0f};
+    printf("Test 15: bitnet_sample_token rejects NULL model... ");
+    assert(bitnet_sample_token(&ctx, logits) == -1);
+    printf("OK\n");
+}
+
+static void test_bitnet_sample_token_rejects_null_logits(void) {
+    tiny_fixture_t fx;
+    init_tiny_fixture(&fx, 4);
+    printf("Test 16: bitnet_sample_token rejects NULL logits... ");
+    assert(bitnet_sample_token(&fx.ctx, NULL) == -1);
+    printf("OK\n");
+    free_tiny_fixture(&fx);
+}
+
+static void test_bn_sample_growth_reuses_existing_buffer(void) {
+    bn_sampler_t s;
+    bn_sampler_init(&s, 1.0f, 0, 1.0f);
+    bn_sampler_seed(&s, 42);
+
+    /* Allocate pairs buffer via a first sample call (temp>0 uses pairs). */
+    float logits3[] = {0.0f, 2.0f, 1.0f};
+    int result = bn_sample(&s, logits3, 3);
+    assert(result >= 0 && result < 3);
+    assert(s.pairs_buf != NULL);
+    assert(s.pairs_cap == 3);
+
+    void *buf_after_growth = s.pairs_buf;
+
+    /* Second call with same or smaller vocab must reuse the buffer. */
+    float logits2[] = {1.0f, 0.0f};
+    result = bn_sample(&s, logits2, 2);
+    assert(result >= 0 && result < 2);
+    assert(s.pairs_buf == buf_after_growth);
+    assert(s.pairs_cap == 3);
+
+    printf("Test 17: bn_sample growth reuses existing buffer when capacity sufficient... OK\n");
+
+    free(s.pairs_buf);
+}
+
 int main(void) {
     printf("=== Forward Guard Tests ===\n\n");
 
@@ -534,6 +614,13 @@ int main(void) {
     test_forward_overflow_leaves_cache_untouched();
     test_generate_fails_on_context_exhaustion();
     test_generate_empty_prompt_returns_zero();
+    test_bn_sample_rejects_null_sampler();
+    test_bn_sample_rejects_null_logits();
+    test_bn_sample_rejects_non_positive_vocab();
+    test_bitnet_sample_token_rejects_null_ctx();
+    test_bitnet_sample_token_rejects_null_model();
+    test_bitnet_sample_token_rejects_null_logits();
+    test_bn_sample_growth_reuses_existing_buffer();
 
     printf("\n=== All forward guard tests passed ===\n");
     return 0;

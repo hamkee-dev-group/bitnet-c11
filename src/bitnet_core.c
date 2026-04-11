@@ -645,6 +645,7 @@ char *bitnet_detokenize(bitnet_ctx_t *ctx, const int *tokens, int n) {
 }
 
 int bitnet_sample_token(bitnet_ctx_t *ctx, float *logits) {
+    if (!ctx || !ctx->model || !logits) return -1;
     return bn_sample(&ctx->sampler, logits, ctx->model->n_vocab);
 }
 

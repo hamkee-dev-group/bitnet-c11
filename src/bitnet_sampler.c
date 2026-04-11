@@ -71,6 +71,8 @@ static int bn_cmp_desc(const void *a, const void *b) {
 }
 
 int bn_sample(bn_sampler_t *s, float *logits, int n_vocab) {
+    if (!s || !logits || n_vocab <= 0) return -1;
+
     if (s->temperature < 1e-6f) {
         int best = 0;
         for (int i = 1; i < n_vocab; i++) {
@@ -96,8 +98,10 @@ int bn_sample(bn_sampler_t *s, float *logits, int n_vocab) {
     int k = (s->top_k > 0 && s->top_k < n_vocab) ? s->top_k : n_vocab;
 
     if (s->pairs_cap < n_vocab) {
+        void *new_buf = malloc((size_t)n_vocab * sizeof(bn_logit_pair_t));
+        if (!new_buf) return -1;
         free(s->pairs_buf);
-        s->pairs_buf = malloc((size_t)n_vocab * sizeof(bn_logit_pair_t));
+        s->pairs_buf = new_buf;
         s->pairs_cap = n_vocab;
     }
     bn_logit_pair_t *pairs = (bn_logit_pair_t *)s->pairs_buf;
