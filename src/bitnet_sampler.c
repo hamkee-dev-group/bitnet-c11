@@ -4,6 +4,7 @@
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <unistd.h>
 
@@ -39,8 +40,13 @@ void bn_rng_fill_from_fd(int fd, uint8_t *buf, size_t total) {
     size_t filled = 0;
     while (filled < total) {
         ssize_t r = read(fd, buf + filled, total - filled);
-        if (r <= 0) break;
-        filled += (size_t)r;
+        if (r > 0) {
+            filled += (size_t)r;
+        } else if (r == -1 && errno == EINTR) {
+            continue;
+        } else {
+            break;
+        }
     }
     if (filled < total) {
         const uint8_t *fb = (const uint8_t *)bn_rng_fallback;
