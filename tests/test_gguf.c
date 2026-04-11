@@ -555,6 +555,66 @@ static void create_metadata_only_fixture(char path_template[],
     assert(fclose(fp) == 0);
 }
 
+/* Build a metadata-only GGUF with custom head geometry values for validation
+ * tests.  Any override value of 0 means "use the default". */
+static void create_head_geometry_fixture(char path_template[],
+                                         uint32_t n_embd,
+                                         uint32_t n_head,
+                                         uint32_t n_head_kv) {
+    if (n_embd == 0) n_embd = 4;
+    if (n_head == 0) n_head = 1;
+    if (n_head_kv == 0) n_head_kv = 1;
+
+    struct { const char *suffix; uint32_t type; uint32_t u32_val; float f32_val; } keys[] = {
+        { "vocab_size",                      BN_GGUF_TYPE_UINT32,  4,        0.0f    },
+        { "embedding_length",                BN_GGUF_TYPE_UINT32,  n_embd,   0.0f    },
+        { "block_count",                     BN_GGUF_TYPE_UINT32,  1,        0.0f    },
+        { "attention.head_count",            BN_GGUF_TYPE_UINT32,  n_head,   0.0f    },
+        { "attention.head_count_kv",         BN_GGUF_TYPE_UINT32,  n_head_kv,0.0f    },
+        { "feed_forward_length",             BN_GGUF_TYPE_UINT32,  4,        0.0f    },
+        { "context_length",                  BN_GGUF_TYPE_UINT32,  8,        0.0f    },
+        { "attention.layer_norm_rms_epsilon", BN_GGUF_TYPE_FLOAT32, 0,       1e-5f   },
+        { "rope.freq_base",                  BN_GGUF_TYPE_FLOAT32, 0,       10000.0f },
+    };
+    const size_t n_keys = sizeof(keys) / sizeof(keys[0]);
+
+    int n_kv = 2; /* general.architecture + general.alignment */
+    n_kv += (int)n_keys;
+
+    int fd = mkstemp(path_template);
+    assert(fd >= 0);
+    FILE *fp = fdopen(fd, "wb");
+    assert(fp != NULL);
+
+    assert(fwrite("GGUF", 1, 4, fp) == 4);
+    write_u32(fp, 3);
+    write_u64(fp, 0); /* n_tensors */
+    write_u64(fp, (uint64_t)n_kv);
+
+    write_str(fp, "general.architecture");
+    write_u32(fp, BN_GGUF_TYPE_STRING);
+    write_str(fp, "bitnet-b1.58");
+
+    write_str(fp, "general.alignment");
+    write_u32(fp, BN_GGUF_TYPE_UINT32);
+    write_u32(fp, 32);
+
+    char key_buf[256];
+    for (size_t i = 0; i < n_keys; i++) {
+        snprintf(key_buf, sizeof(key_buf), "bitnet-b1.58.%s", keys[i].suffix);
+        write_str(fp, key_buf);
+        write_u32(fp, keys[i].type);
+        if (keys[i].type == BN_GGUF_TYPE_UINT32) {
+            write_u32(fp, keys[i].u32_val);
+        } else {
+            assert(fwrite(&keys[i].f32_val, sizeof(float), 1, fp) == 1);
+        }
+    }
+
+    write_padding(fp, 32);
+    assert(fclose(fp) == 0);
+}
+
 static void create_missing_path(char path_template[]) {
     int fd = mkstemp(path_template);
     assert(fd >= 0);
@@ -733,6 +793,40 @@ int main(void) {
         printf("Test 17: Reject model with wrong-typed rope.freq_base... ");
         assert(bitnet_model_load(p2) == NULL);
         assert(unlink(p2) == 0);
+        printf("OK\n");
+    }
+
+    /* --- Head geometry validation tests --- */
+    {
+        char p[] = "/tmp/bn_geom_embd_mod_head_XXXXXX";
+        create_head_geometry_fixture(p, 5, 3, 1); /* 5 % 3 != 0 */
+        printf("Test 19: Reject n_embd not divisible by n_head... ");
+        assert(bitnet_model_load(p) == NULL);
+        assert(unlink(p) == 0);
+        printf("OK\n");
+    }
+    {
+        char p[] = "/tmp/bn_geom_head_mod_kv_XXXXXX";
+        create_head_geometry_fixture(p, 6, 3, 2); /* 3 % 2 != 0 */
+        printf("Test 20: Reject n_head not divisible by n_head_kv... ");
+        assert(bitnet_model_load(p) == NULL);
+        assert(unlink(p) == 0);
+        printf("OK\n");
+    }
+    {
+        char p[] = "/tmp/bn_geom_odd_embd_head_XXXXXX";
+        create_head_geometry_fixture(p, 3, 1, 1); /* n_embd_head = 3 (odd) */
+        printf("Test 21: Reject odd n_embd_head... ");
+        assert(bitnet_model_load(p) == NULL);
+        assert(unlink(p) == 0);
+        printf("OK\n");
+    }
+    {
+        char p[] = "/tmp/bn_geom_kv_gt_head_XXXXXX";
+        create_head_geometry_fixture(p, 4, 1, 2); /* n_head < n_head_kv */
+        printf("Test 22: Reject n_head_kv > n_head... ");
+        assert(bitnet_model_load(p) == NULL);
+        assert(unlink(p) == 0);
         printf("OK\n");
     }
 

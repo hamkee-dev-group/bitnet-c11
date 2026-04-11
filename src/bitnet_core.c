@@ -389,7 +389,31 @@ bitnet_model_t *bitnet_model_load(const char *path) {
 
     #undef REQUIRE_U32
     #undef REQUIRE_F32
+
+    if (m->n_embd % m->n_head != 0) {
+        fprintf(stderr, "model: n_embd (%d) is not divisible by n_head (%d)\n",
+                m->n_embd, m->n_head);
+        bitnet_model_free(m);
+        return NULL;
+    }
+    if (m->n_head_kv <= 0) {
+        fprintf(stderr, "model: n_head_kv (%d) must be positive\n", m->n_head_kv);
+        bitnet_model_free(m);
+        return NULL;
+    }
+    if (m->n_head % m->n_head_kv != 0) {
+        fprintf(stderr, "model: n_head (%d) is not divisible by n_head_kv (%d)\n",
+                m->n_head, m->n_head_kv);
+        bitnet_model_free(m);
+        return NULL;
+    }
     m->n_embd_head = m->n_embd / m->n_head;
+    if (m->n_embd_head % 2 != 0) {
+        fprintf(stderr, "model: n_embd_head (%d) must be even for RoPE\n",
+                m->n_embd_head);
+        bitnet_model_free(m);
+        return NULL;
+    }
 
     fprintf(stderr, "model: %s, embd=%d, layers=%d, heads=%d/%d, ff=%d, ctx=%d\n",
             arch, m->n_embd, m->n_layer, m->n_head, m->n_head_kv,
