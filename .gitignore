@@ -3,3 +3,4 @@ models/
 *.o
 bitnet_bench
 test_*
+bitnet_cli
