@@ -472,6 +472,89 @@ static void create_invalid_fixture(char path_template[],
     assert(close(fd) == 0);
 }
 
+/* Build a GGUF with only metadata (0 tensors) for metadata-validation tests.
+ * arch: architecture string, or NULL to omit the general.architecture KV.
+ * skip_kv_suffix: if non-NULL, omit this arch-scoped key.
+ * mistype_kv_suffix: if non-NULL, write this key with the wrong GGUF type. */
+static void create_metadata_only_fixture(char path_template[],
+                                         const char *arch,
+                                         const char *skip_kv_suffix,
+                                         const char *mistype_kv_suffix) {
+    const char *prefix = arch ? arch : "bitnet-b1.58";
+
+    struct { const char *suffix; uint32_t type; uint32_t u32_val; float f32_val; } keys[] = {
+        { "vocab_size",                      BN_GGUF_TYPE_UINT32,  4,      0.0f    },
+        { "embedding_length",                BN_GGUF_TYPE_UINT32,  4,      0.0f    },
+        { "block_count",                     BN_GGUF_TYPE_UINT32,  1,      0.0f    },
+        { "attention.head_count",            BN_GGUF_TYPE_UINT32,  1,      0.0f    },
+        { "attention.head_count_kv",         BN_GGUF_TYPE_UINT32,  1,      0.0f    },
+        { "feed_forward_length",             BN_GGUF_TYPE_UINT32,  4,      0.0f    },
+        { "context_length",                  BN_GGUF_TYPE_UINT32,  8,      0.0f    },
+        { "attention.layer_norm_rms_epsilon", BN_GGUF_TYPE_FLOAT32, 0,     1e-5f   },
+        { "rope.freq_base",                  BN_GGUF_TYPE_FLOAT32, 0,     10000.0f },
+    };
+    const size_t n_keys = sizeof(keys) / sizeof(keys[0]);
+
+    int n_kv = 1; /* general.alignment always present */
+    if (arch) n_kv++;
+    for (size_t i = 0; i < n_keys; i++) {
+        if (skip_kv_suffix && strcmp(keys[i].suffix, skip_kv_suffix) == 0) continue;
+        n_kv++;
+    }
+
+    int fd = mkstemp(path_template);
+    assert(fd >= 0);
+    FILE *fp = fdopen(fd, "wb");
+    assert(fp != NULL);
+
+    assert(fwrite("GGUF", 1, 4, fp) == 4);
+    write_u32(fp, 3);
+    write_u64(fp, 0); /* n_tensors */
+    write_u64(fp, (uint64_t)n_kv);
+
+    if (arch) {
+        write_str(fp, "general.architecture");
+        write_u32(fp, BN_GGUF_TYPE_STRING);
+        write_str(fp, arch);
+    }
+
+    write_str(fp, "general.alignment");
+    write_u32(fp, BN_GGUF_TYPE_UINT32);
+    write_u32(fp, 32);
+
+    char key_buf[256];
+    for (size_t i = 0; i < n_keys; i++) {
+        if (skip_kv_suffix && strcmp(keys[i].suffix, skip_kv_suffix) == 0) continue;
+
+        snprintf(key_buf, sizeof(key_buf), "%s.%s", prefix, keys[i].suffix);
+        write_str(fp, key_buf);
+
+        int mistype = mistype_kv_suffix &&
+                      strcmp(keys[i].suffix, mistype_kv_suffix) == 0;
+        if (mistype) {
+            /* Swap u32 ↔ f32 to produce a type mismatch. */
+            if (keys[i].type == BN_GGUF_TYPE_UINT32) {
+                write_u32(fp, BN_GGUF_TYPE_FLOAT32);
+                float v = 1.0f;
+                assert(fwrite(&v, sizeof(v), 1, fp) == 1);
+            } else {
+                write_u32(fp, BN_GGUF_TYPE_UINT32);
+                write_u32(fp, 42);
+            }
+        } else {
+            write_u32(fp, keys[i].type);
+            if (keys[i].type == BN_GGUF_TYPE_UINT32) {
+                write_u32(fp, keys[i].u32_val);
+            } else {
+                assert(fwrite(&keys[i].f32_val, sizeof(float), 1, fp) == 1);
+            }
+        }
+    }
+
+    write_padding(fp, 32);
+    assert(fclose(fp) == 0);
+}
+
 static void create_missing_path(char path_template[]) {
     int fd = mkstemp(path_template);
     assert(fd >= 0);
@@ -600,9 +683,62 @@ int main(void) {
     assert(unlink(missing_attn_q_path) == 0);
     printf("OK\n");
 
+    /* --- Malformed-metadata tests using metadata-only fixtures --- */
+    {
+        char p[] = "/tmp/bn_meta_no_arch_XXXXXX";
+        create_metadata_only_fixture(p, NULL, NULL, NULL);
+        printf("Test 13: Reject model with missing general.architecture... ");
+        assert(bitnet_model_load(p) == NULL);
+        assert(unlink(p) == 0);
+        printf("OK\n");
+    }
+    {
+        char p[] = "/tmp/bn_meta_wrong_arch_XXXXXX";
+        create_metadata_only_fixture(p, "llama", NULL, NULL);
+        printf("Test 14: Reject model with wrong architecture... ");
+        assert(bitnet_model_load(p) == NULL);
+        assert(unlink(p) == 0);
+        printf("OK\n");
+    }
+
+    /* Test each required arch-scoped key missing. */
+    {
+        static const char *required_keys[] = {
+            "vocab_size", "embedding_length", "block_count",
+            "attention.head_count", "attention.head_count_kv",
+            "feed_forward_length", "context_length",
+            "attention.layer_norm_rms_epsilon", "rope.freq_base",
+        };
+        for (size_t i = 0; i < sizeof(required_keys)/sizeof(required_keys[0]); i++) {
+            char p[] = "/tmp/bn_meta_miss_kv_XXXXXX";
+            create_metadata_only_fixture(p, "bitnet-b1.58", required_keys[i], NULL);
+            printf("Test 15.%zu: Reject model missing %s... ", i, required_keys[i]);
+            assert(bitnet_model_load(p) == NULL);
+            assert(unlink(p) == 0);
+            printf("OK\n");
+        }
+    }
+
+    /* Test wrong-typed keys (u32 written as f32, f32 written as u32). */
+    {
+        char p1[] = "/tmp/bn_meta_mistype_u32_XXXXXX";
+        create_metadata_only_fixture(p1, "bitnet-b1.58", NULL, "vocab_size");
+        printf("Test 16: Reject model with wrong-typed vocab_size... ");
+        assert(bitnet_model_load(p1) == NULL);
+        assert(unlink(p1) == 0);
+        printf("OK\n");
+
+        char p2[] = "/tmp/bn_meta_mistype_f32_XXXXXX";
+        create_metadata_only_fixture(p2, "bitnet-b1.58", NULL, "rope.freq_base");
+        printf("Test 17: Reject model with wrong-typed rope.freq_base... ");
+        assert(bitnet_model_load(p2) == NULL);
+        assert(unlink(p2) == 0);
+        printf("OK\n");
+    }
+
     char missing_tokenizer_kv_path[] = "/tmp/bn_gguf_open_missing_tokenizer_kv_XXXXXX";
     create_minimal_model_fixture(missing_tokenizer_kv_path, NULL);
-    printf("Test 13: Reject context creation when tokenizer metadata is missing... ");
+    printf("Test 18: Reject context creation when tokenizer metadata is missing... ");
     bitnet_model_t *model = bitnet_model_load(missing_tokenizer_kv_path);
     assert(model != NULL);
     params.n_ctx = 8;

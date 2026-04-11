@@ -347,42 +347,48 @@ bitnet_model_t *bitnet_model_load(const char *path) {
     m->gguf = g;
 
     const char *arch = bn_gguf_get_str(g, "general.architecture");
-    if (!arch) arch = "bitnet-b1.58";
+    if (!arch || strcmp(arch, "bitnet-b1.58") != 0) {
+        fprintf(stderr, "model: missing or unsupported general.architecture\n");
+        bitnet_model_free(m);
+        return NULL;
+    }
 
     char key[256];
 
-    #define GET_U32(field, name) do { \
+    #define REQUIRE_U32(field, name) do { \
         snprintf(key, sizeof(key), "%s." name, arch); \
-        m->field = (int)bn_gguf_get_u32(g, key); \
+        bn_gguf_kv_t *kv = bn_gguf_find_kv(g, key); \
+        if (!kv || kv->type != BN_GGUF_TYPE_UINT32) { \
+            fprintf(stderr, "model: missing or wrong-typed key %s\n", key); \
+            bitnet_model_free(m); \
+            return NULL; \
+        } \
+        m->field = (int)kv->val.u32; \
     } while(0)
 
-    #define GET_F32(field, name) do { \
+    #define REQUIRE_F32(field, name) do { \
         snprintf(key, sizeof(key), "%s." name, arch); \
-        m->field = bn_gguf_get_f32(g, key); \
+        bn_gguf_kv_t *kv = bn_gguf_find_kv(g, key); \
+        if (!kv || kv->type != BN_GGUF_TYPE_FLOAT32) { \
+            fprintf(stderr, "model: missing or wrong-typed key %s\n", key); \
+            bitnet_model_free(m); \
+            return NULL; \
+        } \
+        m->field = kv->val.f32; \
     } while(0)
 
-    GET_U32(n_vocab,     "vocab_size");
-    GET_U32(n_embd,      "embedding_length");
-    GET_U32(n_layer,     "block_count");
-    GET_U32(n_head,      "attention.head_count");
-    GET_U32(n_head_kv,   "attention.head_count_kv");
-    GET_U32(n_ff,        "feed_forward_length");
-    GET_U32(n_ctx,       "context_length");
-    GET_F32(rms_norm_eps,"attention.layer_norm_rms_epsilon");
-    GET_F32(rope_freq_base, "rope.freq_base");
+    REQUIRE_U32(n_vocab,     "vocab_size");
+    REQUIRE_U32(n_embd,      "embedding_length");
+    REQUIRE_U32(n_layer,     "block_count");
+    REQUIRE_U32(n_head,      "attention.head_count");
+    REQUIRE_U32(n_head_kv,   "attention.head_count_kv");
+    REQUIRE_U32(n_ff,        "feed_forward_length");
+    REQUIRE_U32(n_ctx,       "context_length");
+    REQUIRE_F32(rms_norm_eps,"attention.layer_norm_rms_epsilon");
+    REQUIRE_F32(rope_freq_base, "rope.freq_base");
 
-    #undef GET_U32
-    #undef GET_F32
-
-    if (m->n_head == 0) m->n_head = 20;
-    if (m->n_head_kv == 0) m->n_head_kv = 5;
-    if (m->n_embd == 0) m->n_embd = 2560;
-    if (m->n_layer == 0) m->n_layer = 30;
-    if (m->n_ff == 0) m->n_ff = 6912;
-    if (m->n_ctx == 0) m->n_ctx = 4096;
-    if (m->n_vocab == 0) m->n_vocab = 128256;
-    if (m->rms_norm_eps == 0.0f) m->rms_norm_eps = 1e-5f;
-    if (m->rope_freq_base == 0.0f) m->rope_freq_base = 500000.0f;
+    #undef REQUIRE_U32
+    #undef REQUIRE_F32
     m->n_embd_head = m->n_embd / m->n_head;
 
     fprintf(stderr, "model: %s, embd=%d, layers=%d, heads=%d/%d, ff=%d, ctx=%d\n",
