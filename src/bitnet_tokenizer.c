@@ -412,7 +412,7 @@ static int bn_bpe_encode(bn_tokenizer_t *t, const char *text, int text_len,
                                  syms[j].text, syms[j].len);
         if (rank >= 0) {
             bn_bigram_t bg = { .left = i, .right = j, .rank = rank };
-            bn_heap_push(&heap, bg);
+            if (!bn_heap_push(&heap, bg)) { free(heap.data); free(syms); return 0; }
         }
     }
 
@@ -436,7 +436,7 @@ static int bn_bpe_encode(bn_tokenizer_t *t, const char *text, int text_len,
                                      left->text, left->len);
             if (rank >= 0) {
                 bn_bigram_t nbg = { .left = left->prev, .right = bg.left, .rank = rank };
-                bn_heap_push(&heap, nbg);
+                if (!bn_heap_push(&heap, nbg)) { free(heap.data); free(syms); return 0; }
             }
         }
 
@@ -446,7 +446,7 @@ static int bn_bpe_encode(bn_tokenizer_t *t, const char *text, int text_len,
                                      nxt->text, nxt->len);
             if (rank >= 0) {
                 bn_bigram_t nbg = { .left = bg.left, .right = left->next, .rank = rank };
-                bn_heap_push(&heap, nbg);
+                if (!bn_heap_push(&heap, nbg)) { free(heap.data); free(syms); return 0; }
             }
         }
     }
