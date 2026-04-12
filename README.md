@@ -12,9 +12,10 @@ No C++. No Python. No external dependencies beyond libc, libm, and pthreads.
 - **I2_S quantization** &mdash; native 2-bit ternary weight unpacking
 - **GPT-2 BPE tokenizer** &mdash; byte-level encoding, reads vocab/merges from GGUF metadata
 - **AVX2 SIMD kernel** &mdash; `_mm256_maddubs_epi16` for ternary GEMV, FMA for F32 output projection
-- **Multi-threaded** &mdash; pthread-based parallel matmul for both I2_S and F32 layers
+- **Multi-threaded** &mdash; pthread-based thread pool (`bn_pool_create`) for parallel I2_S GEMV (`bn_gemv_mt`) and F32 matmul (`bn_matmul_f32`)
 - **Arena allocator** &mdash; zero allocations during inference after init
 - **Thread-safe** &mdash; no global state, all mutable data lives in the context
+- **Attention timing** &mdash; `bitnet_attn_time_reset()` exposes accumulated attention time for profiling
 
 ## Getting a Model
 
@@ -41,6 +42,15 @@ make SIMD=scalar    # portable scalar fallback (any platform)
 
 Requires a C11 compiler (gcc, clang) and pthreads. That's it.
 
+Build targets:
+
+| Target | Output | Description |
+|--------|--------|-------------|
+| `make` | `bitnet_cli`, `bitnet_bench`, `bench_rope` | Default: CLI, benchmark, and RoPE bench |
+| `make test` | 13 test binaries | Build and run the full test suite |
+| `make bench` | `bitnet_bench` | Full-model + micro benchmark tool |
+| `make compare` | `compare_llama` | Side-by-side comparison vs llama.cpp |
+
 ## Usage
 
 ```sh
@@ -63,17 +73,42 @@ Requires a C11 compiler (gcc, clang) and pthreads. That's it.
 
 ## Tests
 
-Unit tests cover the GGUF parser, matmul kernels (scalar + AVX2), and tokenizer.
-They require a model file &mdash; set `BITNET_MODEL` to point at it:
+The test suite covers the GGUF parser, matmul kernels, quantizer, tokenizer
+(including UTF-8 edge cases, metadata, and thread safety), arena allocator,
+forward-pass guards, sampler edge cases, RMS normalization, and CLI argument
+parsing. Most tests require a model file &mdash; set `BITNET_MODEL` to point
+at it:
 
 ```sh
 export BITNET_MODEL=models/BitNet-b1.58-2B-4T/ggml-model-i2_s.gguf
 
-make test               # GGUF parser, matmul kernels, tokenizer
+make test               # build and run all 13 tests
 make test_vs_reference  # compare output against llama.cpp (optional)
 ```
 
-The matmul test (`test_matmul`) is self-contained and does not need a model file.
+### Test Matrix
+
+`make test` builds and runs the following:
+
+| Test | What it covers |
+|------|----------------|
+| `test_matmul` | Matmul kernel correctness (scalar vs AVX2) |
+| `test_thread_create_failures` | Thread pool resilience under creation failures |
+| `test_quantizer` | Activation quantization round-trips |
+| `test_gguf` | GGUF V3 parser correctness |
+| `test_tokenizer_utf8` | Tokenizer UTF-8 encoding edge cases |
+| `test_tokenizer_metadata` | Tokenizer metadata extraction from GGUF |
+| `test_tokenizer_threads` | Concurrent tokenizer access |
+| `test_arena` | Arena allocator behavior |
+| `test_forward_guards` | Forward-pass argument validation |
+| `test_sampler_oom` | Sampler behavior under allocation failure |
+| `test_sampler_init` | Sampler initialization and defaults |
+| `test_rmsnorm` | RMS normalization correctness |
+| `test_cli_args` | CLI and bench argument parsing |
+
+`test_matmul` and `test_rmsnorm` are self-contained and do not need a model
+file. `test_cli_args` requires `bitnet_cli` and `bitnet_bench` to be built
+first (handled automatically by `make test`).
 
 ### Reference Comparison
 
@@ -83,8 +118,28 @@ Requires `llama-cli` and `llama-tokenize` on `$PATH` (or set `LLAMA_CLI` / `LLAM
 
 ## Benchmark
 
+`bitnet_bench` supports two modes:
+
+**Full-model benchmark** &mdash; measures prompt processing and token generation
+throughput on a real model, reports attention time breakdown via
+`bitnet_attn_time_reset()`, and emits structured JSON to stdout:
+
 ```sh
 make bench BITNET_MODEL=models/BitNet-b1.58-2B-4T/ggml-model-i2_s.gguf
+# or run directly:
+./bitnet_bench -m models/BitNet-b1.58-2B-4T/ggml-model-i2_s.gguf -t 4
+```
+
+The JSON output includes `pp_tok_s` (prompt eval tokens/sec), `tg_tok_s`
+(generation tokens/sec), and `pp_attn_ms` / `tg_attn_ms` (attention time in
+milliseconds for each phase).
+
+**Kernel microbenchmark** (`--micro`) &mdash; benchmarks I2_S GEMV and F32
+matmul kernels at representative layer shapes, reporting single-thread and
+multi-thread latency with speedup ratios:
+
+```sh
+./bitnet_bench --micro -t 4
 ```
 
 ### llama.cpp Comparison
@@ -100,14 +155,18 @@ make compare                          # summary on stderr, JSON on stdout
 make compare > comparison.json        # save the JSON artifact
 ```
 
-The runner exits non-zero if the model file or `llama-cli` is missing.
-See `tools/compare_llama.c` for the full methodology (greedy decoding,
-32-token generation, 4 threads, `CLOCK_MONOTONIC` timing).
+The JSON output includes per-engine prompt eval and generation throughput, plus
+an overall generation speedup ratio. The runner exits non-zero if the model
+file or `llama-cli` is missing. See `tools/compare_llama.c` for the full
+methodology: greedy decoding, 32-token generation, 4 threads,
+`CLOCK_MONOTONIC` timing.
 
 ## Performance
 
-Measured with `make compare` on a 4-core Xeon E-2224G (AVX2, single-socket,
-no GPU), BitNet-b1.58-2B-4T model, greedy decoding, 4 threads:
+Measured with `make compare` on an 8-core CPU (AVX2, single-socket, no GPU),
+BitNet-b1.58-2B-4T model, greedy decoding. The `compare_llama` benchmark
+hard-codes 4 threads (`N_THREADS 4`) and 32 generated tokens, so the numbers
+below reflect 4-thread execution on the 8-core machine:
 
 | Metric | bitnet-c11 | llama.cpp | Speedup |
 |--------|------------|-----------|---------|
@@ -117,7 +176,9 @@ no GPU), BitNet-b1.58-2B-4T model, greedy decoding, 4 threads:
 To reproduce, run `make compare` with `BITNET_MODEL` pointing at
 `models/BitNet-b1.58-2B-4T/ggml-model-i2_s.gguf` and `LLAMA_CLI` pointing
 at a llama.cpp build. Full JSON results go to stdout; redirect to a file to
-keep them.
+keep them. Adjust the thread count by editing `N_THREADS` in
+`tools/compare_llama.c`, or use `bitnet_bench -t <N>` for standalone
+bitnet-c11 benchmarks at different thread counts.
 
 ## Architecture
 
@@ -133,17 +194,29 @@ src/
   bitnet_matmul_scalar.c    Portable scalar I2_S GEMV kernel
   bitnet_matmul_avx2.c      AVX2 optimized I2_S GEMV kernel
   bitnet_sampler.c          Temperature / top-k / top-p sampling
-  bitnet_core.c             Model loading, transformer forward pass
+  bitnet_core.c             Model loading, thread pool, transformer forward pass
 
 tools/
   bitnet_cli.c              Command-line inference tool
-  bitnet_bench.c            Benchmark (prompt + generation speed)
-  compare_llama.c           Consolidated comparison runner vs llama.cpp
+  bitnet_bench.c            Benchmark (full-model + kernel microbenchmarks)
+  compare_llama.c           Consolidated comparison runner vs llama.cpp (JSON + summary)
+  bench_rope.c              RoPE kernel benchmark
 
 tests/
   test_gguf.c               GGUF parser correctness
   test_matmul.c             Matmul kernel correctness (scalar vs AVX2)
+  test_thread_create_failures.c  Thread pool creation failure handling
+  test_quantizer.c          Activation quantization round-trips
   test_tokenizer.c          Tokenizer encode/decode round-trips
+  test_tokenizer_utf8.c     Tokenizer UTF-8 edge cases
+  test_tokenizer_metadata.c Tokenizer metadata extraction
+  test_tokenizer_threads.c  Concurrent tokenizer access
+  test_arena.c              Arena allocator behavior
+  test_forward_guards.c     Forward-pass argument validation
+  test_sampler_oom.c        Sampler OOM resilience
+  test_sampler_init.c       Sampler initialization
+  test_rmsnorm.c            RMS normalization correctness
+  test_cli_args.c           CLI argument parsing
   test_vs_reference.c       Full comparison against llama.cpp
 ```
 
@@ -193,6 +266,9 @@ bitnet_generate(ctx, tokens, n, 100, my_callback, NULL);
 float *logits = bitnet_forward(ctx, tokens, n, true);
 int next = bitnet_sample_token(ctx, logits);
 
+// Attention profiling
+double attn_sec = bitnet_attn_time_reset(ctx);
+
 // Cleanup
 bitnet_ctx_free(ctx);
 bitnet_model_free(model);
@@ -203,4 +279,3 @@ bitnet_model_free(model);
 | Model | Parameters | GGUF Type | Status |
 |-------|-----------|-----------|--------|
 | BitNet-b1.58-2B-4T | 2B | I2_S | Tested |
-
