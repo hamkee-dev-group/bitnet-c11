@@ -329,6 +329,13 @@ static bool bn_require_i2s_matrix(bn_gguf_t *g, const char *name,
                 (unsigned long)n_cols, (unsigned long)n_rows);
         return false;
     }
+    if (n_cols % 128 != 0) {
+        fprintf(stderr,
+                "model: %s has %lu columns, must be a multiple of 128 "
+                "for I2_S kernel block format\n",
+                name, (unsigned long)n_cols);
+        return false;
+    }
 
     snprintf(scale_name, sizeof(scale_name), "%s.scale", name);
     if (!bn_require_f32_scalar(g, scale_name, scale_out)) return false;
@@ -479,6 +486,14 @@ bitnet_model_t *bitnet_model_load(const char *path) {
             m->output = (float *)oh->data;
             m->output_is_i2s = false;
         } else if (oh->type == BN_GGML_TYPE_I2_S) {
+            if (oh->ne[0] % 128 != 0) {
+                fprintf(stderr,
+                        "model: output.weight has %lu columns, must be a "
+                        "multiple of 128 for I2_S kernel block format\n",
+                        (unsigned long)oh->ne[0]);
+                bitnet_model_free(m);
+                return NULL;
+            }
             m->output_i2s = (uint8_t *)oh->data;
             m->output_is_i2s = true;
             m->output_wscale = bn_get_i2s_weight_scale(oh->data,

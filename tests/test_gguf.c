@@ -104,25 +104,25 @@ static void write_zero_padding_to(FILE *fp, uint64_t target_offset,
 static void create_minimal_model_fixture(char path_template[],
                                          const char *missing_tensor) {
     static const fixture_tensor_t tensors[] = {
-        { "token_embd.weight",        BN_GGML_TYPE_F32, 2, { 4, 4 } },
-        { "output_norm.weight",       BN_GGML_TYPE_F32, 1, { 4, 1 } },
-        { "blk.0.attn_norm.weight",   BN_GGML_TYPE_F32, 1, { 4, 1 } },
-        { "blk.0.attn_sub_norm.weight", BN_GGML_TYPE_F32, 1, { 4, 1 } },
-        { "blk.0.ffn_norm.weight",    BN_GGML_TYPE_F32, 1, { 4, 1 } },
-        { "blk.0.ffn_sub_norm.weight", BN_GGML_TYPE_F32, 1, { 4, 1 } },
-        { "blk.0.attn_q.weight",      BN_GGML_TYPE_I2_S, 2, { 4, 4 } },
+        { "token_embd.weight",        BN_GGML_TYPE_F32, 2, { 128, 4 } },
+        { "output_norm.weight",       BN_GGML_TYPE_F32, 1, { 128, 1 } },
+        { "blk.0.attn_norm.weight",   BN_GGML_TYPE_F32, 1, { 128, 1 } },
+        { "blk.0.attn_sub_norm.weight", BN_GGML_TYPE_F32, 1, { 128, 1 } },
+        { "blk.0.ffn_norm.weight",    BN_GGML_TYPE_F32, 1, { 128, 1 } },
+        { "blk.0.ffn_sub_norm.weight", BN_GGML_TYPE_F32, 1, { 128, 1 } },
+        { "blk.0.attn_q.weight",      BN_GGML_TYPE_I2_S, 2, { 128, 128 } },
         { "blk.0.attn_q.weight.scale", BN_GGML_TYPE_F32, 1, { 1, 1 } },
-        { "blk.0.attn_k.weight",      BN_GGML_TYPE_I2_S, 2, { 4, 4 } },
+        { "blk.0.attn_k.weight",      BN_GGML_TYPE_I2_S, 2, { 128, 128 } },
         { "blk.0.attn_k.weight.scale", BN_GGML_TYPE_F32, 1, { 1, 1 } },
-        { "blk.0.attn_v.weight",      BN_GGML_TYPE_I2_S, 2, { 4, 4 } },
+        { "blk.0.attn_v.weight",      BN_GGML_TYPE_I2_S, 2, { 128, 128 } },
         { "blk.0.attn_v.weight.scale", BN_GGML_TYPE_F32, 1, { 1, 1 } },
-        { "blk.0.attn_output.weight", BN_GGML_TYPE_I2_S, 2, { 4, 4 } },
+        { "blk.0.attn_output.weight", BN_GGML_TYPE_I2_S, 2, { 128, 128 } },
         { "blk.0.attn_output.weight.scale", BN_GGML_TYPE_F32, 1, { 1, 1 } },
-        { "blk.0.ffn_gate.weight",    BN_GGML_TYPE_I2_S, 2, { 4, 4 } },
+        { "blk.0.ffn_gate.weight",    BN_GGML_TYPE_I2_S, 2, { 128, 128 } },
         { "blk.0.ffn_gate.weight.scale", BN_GGML_TYPE_F32, 1, { 1, 1 } },
-        { "blk.0.ffn_up.weight",      BN_GGML_TYPE_I2_S, 2, { 4, 4 } },
+        { "blk.0.ffn_up.weight",      BN_GGML_TYPE_I2_S, 2, { 128, 128 } },
         { "blk.0.ffn_up.weight.scale", BN_GGML_TYPE_F32, 1, { 1, 1 } },
-        { "blk.0.ffn_down.weight",    BN_GGML_TYPE_I2_S, 2, { 4, 4 } },
+        { "blk.0.ffn_down.weight",    BN_GGML_TYPE_I2_S, 2, { 128, 128 } },
         { "blk.0.ffn_down.weight.scale", BN_GGML_TYPE_F32, 1, { 1, 1 } },
     };
     const size_t n_tensors_total = sizeof(tensors) / sizeof(tensors[0]);
@@ -159,7 +159,7 @@ static void create_minimal_model_fixture(char path_template[],
 
     write_str(fp, "bitnet-b1.58.embedding_length");
     write_u32(fp, BN_GGUF_TYPE_UINT32);
-    write_u32(fp, 4);
+    write_u32(fp, 128);
 
     write_str(fp, "bitnet-b1.58.block_count");
     write_u32(fp, BN_GGUF_TYPE_UINT32);
@@ -175,7 +175,7 @@ static void create_minimal_model_fixture(char path_template[],
 
     write_str(fp, "bitnet-b1.58.feed_forward_length");
     write_u32(fp, BN_GGUF_TYPE_UINT32);
-    write_u32(fp, 4);
+    write_u32(fp, 128);
 
     write_str(fp, "bitnet-b1.58.context_length");
     write_u32(fp, BN_GGUF_TYPE_UINT32);
@@ -226,25 +226,25 @@ static void create_minimal_model_fixture(char path_template[],
 
 static void create_minimal_context_model_fixture(char path_template[]) {
     static const fixture_tensor_t tensors[] = {
-        { "token_embd.weight",        BN_GGML_TYPE_F32, 2, { 4, 4 } },
-        { "output_norm.weight",       BN_GGML_TYPE_F32, 1, { 4, 1 } },
-        { "blk.0.attn_norm.weight",   BN_GGML_TYPE_F32, 1, { 4, 1 } },
-        { "blk.0.attn_sub_norm.weight", BN_GGML_TYPE_F32, 1, { 4, 1 } },
-        { "blk.0.ffn_norm.weight",    BN_GGML_TYPE_F32, 1, { 4, 1 } },
-        { "blk.0.ffn_sub_norm.weight", BN_GGML_TYPE_F32, 1, { 4, 1 } },
-        { "blk.0.attn_q.weight",      BN_GGML_TYPE_I2_S, 2, { 4, 4 } },
+        { "token_embd.weight",        BN_GGML_TYPE_F32, 2, { 128, 4 } },
+        { "output_norm.weight",       BN_GGML_TYPE_F32, 1, { 128, 1 } },
+        { "blk.0.attn_norm.weight",   BN_GGML_TYPE_F32, 1, { 128, 1 } },
+        { "blk.0.attn_sub_norm.weight", BN_GGML_TYPE_F32, 1, { 128, 1 } },
+        { "blk.0.ffn_norm.weight",    BN_GGML_TYPE_F32, 1, { 128, 1 } },
+        { "blk.0.ffn_sub_norm.weight", BN_GGML_TYPE_F32, 1, { 128, 1 } },
+        { "blk.0.attn_q.weight",      BN_GGML_TYPE_I2_S, 2, { 128, 128 } },
         { "blk.0.attn_q.weight.scale", BN_GGML_TYPE_F32, 1, { 1, 1 } },
-        { "blk.0.attn_k.weight",      BN_GGML_TYPE_I2_S, 2, { 4, 4 } },
+        { "blk.0.attn_k.weight",      BN_GGML_TYPE_I2_S, 2, { 128, 128 } },
         { "blk.0.attn_k.weight.scale", BN_GGML_TYPE_F32, 1, { 1, 1 } },
-        { "blk.0.attn_v.weight",      BN_GGML_TYPE_I2_S, 2, { 4, 4 } },
+        { "blk.0.attn_v.weight",      BN_GGML_TYPE_I2_S, 2, { 128, 128 } },
         { "blk.0.attn_v.weight.scale", BN_GGML_TYPE_F32, 1, { 1, 1 } },
-        { "blk.0.attn_output.weight", BN_GGML_TYPE_I2_S, 2, { 4, 4 } },
+        { "blk.0.attn_output.weight", BN_GGML_TYPE_I2_S, 2, { 128, 128 } },
         { "blk.0.attn_output.weight.scale", BN_GGML_TYPE_F32, 1, { 1, 1 } },
-        { "blk.0.ffn_gate.weight",    BN_GGML_TYPE_I2_S, 2, { 4, 4 } },
+        { "blk.0.ffn_gate.weight",    BN_GGML_TYPE_I2_S, 2, { 128, 128 } },
         { "blk.0.ffn_gate.weight.scale", BN_GGML_TYPE_F32, 1, { 1, 1 } },
-        { "blk.0.ffn_up.weight",      BN_GGML_TYPE_I2_S, 2, { 4, 4 } },
+        { "blk.0.ffn_up.weight",      BN_GGML_TYPE_I2_S, 2, { 128, 128 } },
         { "blk.0.ffn_up.weight.scale", BN_GGML_TYPE_F32, 1, { 1, 1 } },
-        { "blk.0.ffn_down.weight",    BN_GGML_TYPE_I2_S, 2, { 4, 4 } },
+        { "blk.0.ffn_down.weight",    BN_GGML_TYPE_I2_S, 2, { 128, 128 } },
         { "blk.0.ffn_down.weight.scale", BN_GGML_TYPE_F32, 1, { 1, 1 } },
     };
     static const char *tokens[] = { "a", "b", "c", "d" };
@@ -276,7 +276,7 @@ static void create_minimal_context_model_fixture(char path_template[]) {
 
     write_str(fp, "bitnet-b1.58.embedding_length");
     write_u32(fp, BN_GGUF_TYPE_UINT32);
-    write_u32(fp, 4);
+    write_u32(fp, 128);
 
     write_str(fp, "bitnet-b1.58.block_count");
     write_u32(fp, BN_GGUF_TYPE_UINT32);
@@ -292,7 +292,7 @@ static void create_minimal_context_model_fixture(char path_template[]) {
 
     write_str(fp, "bitnet-b1.58.feed_forward_length");
     write_u32(fp, BN_GGUF_TYPE_UINT32);
-    write_u32(fp, 4);
+    write_u32(fp, 128);
 
     write_str(fp, "bitnet-b1.58.context_length");
     write_u32(fp, BN_GGUF_TYPE_UINT32);
@@ -813,6 +813,122 @@ static void create_string_typed_u32_fixture(char path_template[]) {
     assert(fclose(fp) == 0);
 }
 
+/* Build a model fixture where I2_S tensors have a column count that is not a
+ * multiple of 128, which is incompatible with the kernel block format. */
+static void create_bad_i2s_cols_fixture(char path_template[]) {
+    /* Use n_embd=96 (not a multiple of 128) while keeping other params valid. */
+    static const fixture_tensor_t tensors[] = {
+        { "token_embd.weight",        BN_GGML_TYPE_F32, 2, { 96, 4 } },
+        { "output_norm.weight",       BN_GGML_TYPE_F32, 1, { 96, 1 } },
+        { "blk.0.attn_norm.weight",   BN_GGML_TYPE_F32, 1, { 96, 1 } },
+        { "blk.0.attn_sub_norm.weight", BN_GGML_TYPE_F32, 1, { 96, 1 } },
+        { "blk.0.ffn_norm.weight",    BN_GGML_TYPE_F32, 1, { 96, 1 } },
+        { "blk.0.ffn_sub_norm.weight", BN_GGML_TYPE_F32, 1, { 96, 1 } },
+        { "blk.0.attn_q.weight",      BN_GGML_TYPE_I2_S, 2, { 96, 96 } },
+        { "blk.0.attn_q.weight.scale", BN_GGML_TYPE_F32, 1, { 1, 1 } },
+        { "blk.0.attn_k.weight",      BN_GGML_TYPE_I2_S, 2, { 96, 96 } },
+        { "blk.0.attn_k.weight.scale", BN_GGML_TYPE_F32, 1, { 1, 1 } },
+        { "blk.0.attn_v.weight",      BN_GGML_TYPE_I2_S, 2, { 96, 96 } },
+        { "blk.0.attn_v.weight.scale", BN_GGML_TYPE_F32, 1, { 1, 1 } },
+        { "blk.0.attn_output.weight", BN_GGML_TYPE_I2_S, 2, { 96, 96 } },
+        { "blk.0.attn_output.weight.scale", BN_GGML_TYPE_F32, 1, { 1, 1 } },
+        { "blk.0.ffn_gate.weight",    BN_GGML_TYPE_I2_S, 2, { 96, 96 } },
+        { "blk.0.ffn_gate.weight.scale", BN_GGML_TYPE_F32, 1, { 1, 1 } },
+        { "blk.0.ffn_up.weight",      BN_GGML_TYPE_I2_S, 2, { 96, 96 } },
+        { "blk.0.ffn_up.weight.scale", BN_GGML_TYPE_F32, 1, { 1, 1 } },
+        { "blk.0.ffn_down.weight",    BN_GGML_TYPE_I2_S, 2, { 96, 96 } },
+        { "blk.0.ffn_down.weight.scale", BN_GGML_TYPE_F32, 1, { 1, 1 } },
+    };
+    size_t n_tensors = sizeof(tensors) / sizeof(tensors[0]);
+    uint64_t offset = 0;
+
+    int fd = mkstemp(path_template);
+    assert(fd >= 0);
+
+    FILE *fp = fdopen(fd, "wb");
+    assert(fp != NULL);
+
+    assert(fwrite("GGUF", 1, 4, fp) == 4);
+    write_u32(fp, 3);
+    write_u64(fp, n_tensors);
+    write_u64(fp, 11);
+
+    write_str(fp, "general.architecture");
+    write_u32(fp, BN_GGUF_TYPE_STRING);
+    write_str(fp, "bitnet-b1.58");
+
+    write_str(fp, "general.alignment");
+    write_u32(fp, BN_GGUF_TYPE_UINT32);
+    write_u32(fp, 32);
+
+    write_str(fp, "bitnet-b1.58.vocab_size");
+    write_u32(fp, BN_GGUF_TYPE_UINT32);
+    write_u32(fp, 4);
+
+    write_str(fp, "bitnet-b1.58.embedding_length");
+    write_u32(fp, BN_GGUF_TYPE_UINT32);
+    write_u32(fp, 96);
+
+    write_str(fp, "bitnet-b1.58.block_count");
+    write_u32(fp, BN_GGUF_TYPE_UINT32);
+    write_u32(fp, 1);
+
+    write_str(fp, "bitnet-b1.58.attention.head_count");
+    write_u32(fp, BN_GGUF_TYPE_UINT32);
+    write_u32(fp, 1);
+
+    write_str(fp, "bitnet-b1.58.attention.head_count_kv");
+    write_u32(fp, BN_GGUF_TYPE_UINT32);
+    write_u32(fp, 1);
+
+    write_str(fp, "bitnet-b1.58.feed_forward_length");
+    write_u32(fp, BN_GGUF_TYPE_UINT32);
+    write_u32(fp, 96);
+
+    write_str(fp, "bitnet-b1.58.context_length");
+    write_u32(fp, BN_GGUF_TYPE_UINT32);
+    write_u32(fp, 8);
+
+    write_str(fp, "bitnet-b1.58.attention.layer_norm_rms_epsilon");
+    write_u32(fp, BN_GGUF_TYPE_FLOAT32);
+    {
+        float eps = 1e-5f;
+        assert(fwrite(&eps, sizeof(eps), 1, fp) == 1);
+    }
+
+    write_str(fp, "bitnet-b1.58.rope.freq_base");
+    write_u32(fp, BN_GGUF_TYPE_FLOAT32);
+    {
+        float freq_base = 10000.0f;
+        assert(fwrite(&freq_base, sizeof(freq_base), 1, fp) == 1);
+    }
+
+    uint64_t offsets[sizeof(tensors)/sizeof(tensors[0])];
+    for (size_t i = 0; i < n_tensors; i++) {
+        const fixture_tensor_t *t = &tensors[i];
+        offsets[i] = offset;
+        write_str(fp, t->name);
+        write_u32(fp, t->n_dims);
+        for (uint32_t d = 0; d < t->n_dims; d++) {
+            write_u64(fp, t->ne[d]);
+        }
+        write_u32(fp, t->type);
+        write_u64(fp, offset);
+        offset += fixture_tensor_nbytes(t);
+        offset = align_up(offset, 32);
+    }
+
+    write_padding(fp, 32);
+    uint64_t data_start = (uint64_t)ftell(fp);
+
+    for (size_t i = 0; i < n_tensors; i++) {
+        write_zero_padding_to(fp, offsets[i], data_start);
+        write_fixture_tensor_data(fp, &tensors[i]);
+    }
+
+    assert(fclose(fp) == 0);
+}
+
 static void create_missing_path(char path_template[]) {
     int fd = mkstemp(path_template);
     assert(fd >= 0);
@@ -1054,6 +1170,16 @@ int main(void) {
         char p[] = "/tmp/bn_meta_str_embd_XXXXXX";
         create_string_typed_u32_fixture(p);
         printf("Test 23: Reject model with embedding_length as STRING... ");
+        assert(bitnet_model_load(p) == NULL);
+        assert(unlink(p) == 0);
+        printf("OK\n");
+    }
+
+    /* --- I2_S column-count validation (kernel block format) --- */
+    {
+        char p[] = "/tmp/bn_i2s_bad_cols_XXXXXX";
+        create_bad_i2s_cols_fixture(p);
+        printf("Test 24: Reject I2_S tensor with non-128-multiple columns... ");
         assert(bitnet_model_load(p) == NULL);
         assert(unlink(p) == 0);
         printf("OK\n");
