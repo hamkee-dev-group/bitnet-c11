@@ -59,6 +59,7 @@ static inline bool bn_read_f64(bn_reader_t *r, double *v) {
 static inline bool bn_read_bool(bn_reader_t *r, bool *v) {
     uint8_t b;
     if (!bn_read_u8(r, &b)) return false;
+    if (b > 1) return false;
     *v = (b != 0);
     return true;
 }
@@ -178,7 +179,8 @@ static bool bn_read_kv_value(bn_reader_t *r, bn_gguf_kv_t *kv) {
         return true;
     case BN_GGUF_TYPE_BOOL:
         if (!bn_read_bool(r, &kv->val.b)) {
-            bn_log_kv_read_failure(r, kv, "bool value", "unexpected end of input");
+            bn_log_kv_read_failure(r, kv, "bool value",
+                                   "unexpected end of input or non-canonical bool (must be 0 or 1)");
             return false;
         }
         return true;
@@ -263,6 +265,17 @@ static bool bn_read_kv_value(bn_reader_t *r, bn_gguf_kv_t *kv) {
             }
             memcpy(data, r->ptr, total);
             r->ptr += total;
+            if (atype == BN_GGUF_TYPE_BOOL) {
+                const uint8_t *bytes = (const uint8_t *)data;
+                for (uint64_t i = 0; i < alen; i++) {
+                    if (bytes[i] > 1) {
+                        bn_log_kv_read_failure(r, kv, "bool array element",
+                                               "non-canonical bool value (must be 0 or 1)");
+                        free(data);
+                        return false;
+                    }
+                }
+            }
             kv->val.arr.data = data;
         }
         return true;

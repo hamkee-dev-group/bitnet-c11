@@ -593,6 +593,48 @@ static void create_missing_token_embd_fixture(char path_template[]) {
     assert(fclose(fp) == 0);
 }
 
+static void create_noncanonical_bool_fixture(char path_template[]) {
+    int fd = mkstemp(path_template);
+    assert(fd >= 0);
+
+    FILE *fp = fdopen(fd, "wb");
+    assert(fp != NULL);
+
+    assert(fwrite("GGUF", 1, 4, fp) == 4);
+    write_u32(fp, 3);         /* version */
+    write_u64(fp, 0);         /* n_tensors */
+    write_u64(fp, 1);         /* n_kv */
+
+    write_str(fp, "test.flag");
+    write_u32(fp, BN_GGUF_TYPE_BOOL);
+    uint8_t bad_bool = 2;     /* non-canonical: must be 0 or 1 */
+    assert(fwrite(&bad_bool, 1, 1, fp) == 1);
+
+    assert(fclose(fp) == 0);
+}
+
+static void create_noncanonical_bool_array_fixture(char path_template[]) {
+    int fd = mkstemp(path_template);
+    assert(fd >= 0);
+
+    FILE *fp = fdopen(fd, "wb");
+    assert(fp != NULL);
+
+    assert(fwrite("GGUF", 1, 4, fp) == 4);
+    write_u32(fp, 3);         /* version */
+    write_u64(fp, 0);         /* n_tensors */
+    write_u64(fp, 1);         /* n_kv */
+
+    write_str(fp, "test.flags");
+    write_u32(fp, BN_GGUF_TYPE_ARRAY);
+    write_u32(fp, BN_GGUF_TYPE_BOOL);  /* element type */
+    write_u64(fp, 3);                   /* array length */
+    uint8_t bools[] = { 0, 1, 0xFF };  /* third element is non-canonical */
+    assert(fwrite(bools, 1, 3, fp) == 3);
+
+    assert(fclose(fp) == 0);
+}
+
 static void create_invalid_fixture(char path_template[],
                                    const void *data,
                                    size_t size) {
@@ -1181,6 +1223,24 @@ int main(void) {
         create_bad_i2s_cols_fixture(p);
         printf("Test 24: Reject I2_S tensor with non-128-multiple columns... ");
         assert(bitnet_model_load(p) == NULL);
+        assert(unlink(p) == 0);
+        printf("OK\n");
+    }
+
+    /* --- Non-canonical BOOL validation tests --- */
+    {
+        char p[] = "/tmp/bn_bad_scalar_bool_XXXXXX";
+        create_noncanonical_bool_fixture(p);
+        printf("Test 25: Reject non-canonical scalar BOOL KV... ");
+        assert(bn_gguf_open(p) == NULL);
+        assert(unlink(p) == 0);
+        printf("OK\n");
+    }
+    {
+        char p[] = "/tmp/bn_bad_bool_array_XXXXXX";
+        create_noncanonical_bool_array_fixture(p);
+        printf("Test 26: Reject non-canonical BOOL array element... ");
+        assert(bn_gguf_open(p) == NULL);
         assert(unlink(p) == 0);
         printf("OK\n");
     }
