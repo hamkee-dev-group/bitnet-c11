@@ -712,6 +712,74 @@ static void create_head_geometry_fixture(char path_template[],
     assert(fclose(fp) == 0);
 }
 
+/* Build a metadata-only GGUF where embedding_length is written as
+ * BN_GGUF_TYPE_STRING instead of BN_GGUF_TYPE_UINT32. */
+static void create_string_typed_u32_fixture(char path_template[]) {
+    int fd = mkstemp(path_template);
+    assert(fd >= 0);
+    FILE *fp = fdopen(fd, "wb");
+    assert(fp != NULL);
+
+    assert(fwrite("GGUF", 1, 4, fp) == 4);
+    write_u32(fp, 3);
+    write_u64(fp, 0); /* n_tensors */
+    write_u64(fp, 11); /* n_kv */
+
+    write_str(fp, "general.architecture");
+    write_u32(fp, BN_GGUF_TYPE_STRING);
+    write_str(fp, "bitnet-b1.58");
+
+    write_str(fp, "general.alignment");
+    write_u32(fp, BN_GGUF_TYPE_UINT32);
+    write_u32(fp, 32);
+
+    write_str(fp, "bitnet-b1.58.vocab_size");
+    write_u32(fp, BN_GGUF_TYPE_UINT32);
+    write_u32(fp, 4);
+
+    /* This is the mismatch: embedding_length as STRING instead of UINT32. */
+    write_str(fp, "bitnet-b1.58.embedding_length");
+    write_u32(fp, BN_GGUF_TYPE_STRING);
+    write_str(fp, "4");
+
+    write_str(fp, "bitnet-b1.58.block_count");
+    write_u32(fp, BN_GGUF_TYPE_UINT32);
+    write_u32(fp, 1);
+
+    write_str(fp, "bitnet-b1.58.attention.head_count");
+    write_u32(fp, BN_GGUF_TYPE_UINT32);
+    write_u32(fp, 1);
+
+    write_str(fp, "bitnet-b1.58.attention.head_count_kv");
+    write_u32(fp, BN_GGUF_TYPE_UINT32);
+    write_u32(fp, 1);
+
+    write_str(fp, "bitnet-b1.58.feed_forward_length");
+    write_u32(fp, BN_GGUF_TYPE_UINT32);
+    write_u32(fp, 4);
+
+    write_str(fp, "bitnet-b1.58.context_length");
+    write_u32(fp, BN_GGUF_TYPE_UINT32);
+    write_u32(fp, 8);
+
+    write_str(fp, "bitnet-b1.58.attention.layer_norm_rms_epsilon");
+    write_u32(fp, BN_GGUF_TYPE_FLOAT32);
+    {
+        float eps = 1e-5f;
+        assert(fwrite(&eps, sizeof(eps), 1, fp) == 1);
+    }
+
+    write_str(fp, "bitnet-b1.58.rope.freq_base");
+    write_u32(fp, BN_GGUF_TYPE_FLOAT32);
+    {
+        float freq_base = 10000.0f;
+        assert(fwrite(&freq_base, sizeof(freq_base), 1, fp) == 1);
+    }
+
+    write_padding(fp, 32);
+    assert(fclose(fp) == 0);
+}
+
 static void create_missing_path(char path_template[]) {
     int fd = mkstemp(path_template);
     assert(fd >= 0);
@@ -936,6 +1004,16 @@ int main(void) {
         char p[] = "/tmp/bn_geom_kv_gt_head_XXXXXX";
         create_head_geometry_fixture(p, 4, 1, 2); /* n_head < n_head_kv */
         printf("Test 22: Reject n_head_kv > n_head... ");
+        assert(bitnet_model_load(p) == NULL);
+        assert(unlink(p) == 0);
+        printf("OK\n");
+    }
+
+    /* Test embedding_length stored as STRING instead of UINT32. */
+    {
+        char p[] = "/tmp/bn_meta_str_embd_XXXXXX";
+        create_string_typed_u32_fixture(p);
+        printf("Test 23: Reject model with embedding_length as STRING... ");
         assert(bitnet_model_load(p) == NULL);
         assert(unlink(p) == 0);
         printf("OK\n");
