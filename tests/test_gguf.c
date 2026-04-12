@@ -457,6 +457,39 @@ static void create_zero_alignment_fixture(char path_template[]) {
     assert(fclose(fp) == 0);
 }
 
+static void create_non_pow2_alignment_fixture(char path_template[]) {
+    int fd = mkstemp(path_template);
+    assert(fd >= 0);
+
+    FILE *fp = fdopen(fd, "wb");
+    assert(fp != NULL);
+
+    assert(fwrite("GGUF", 1, 4, fp) == 4);
+    write_u32(fp, 3);
+    write_u64(fp, 1);
+    write_u64(fp, 1);
+
+    write_str(fp, "general.alignment");
+    write_u32(fp, BN_GGUF_TYPE_UINT32);
+    write_u32(fp, 3);  /* 3 is not a power of two */
+
+    write_str(fp, "tensor0");
+    write_u32(fp, 2);
+    write_u64(fp, 4);
+    write_u64(fp, 2);
+    write_u32(fp, BN_GGML_TYPE_F32);
+    write_u64(fp, 0);
+
+    write_padding(fp, 32);
+
+    {
+        const float data[] = {1.0f, 2.0f, 3.0f, 4.0f,
+                              5.0f, 6.0f, 7.0f, 8.0f};
+        assert(fwrite(data, sizeof(float), 8, fp) == 8);
+    }
+    assert(fclose(fp) == 0);
+}
+
 static void create_wrong_type_alignment_fixture(char path_template[]) {
     int fd = mkstemp(path_template);
     assert(fd >= 0);
@@ -885,6 +918,13 @@ int main(void) {
     printf("Test 9: Reject zero alignment... ");
     assert(bn_gguf_open(zero_alignment_path) == NULL);
     assert(unlink(zero_alignment_path) == 0);
+    printf("OK\n");
+
+    char non_pow2_alignment_path[] = "/tmp/bn_gguf_open_non_pow2_align_XXXXXX";
+    create_non_pow2_alignment_fixture(non_pow2_alignment_path);
+    printf("Test 9a: Reject non-power-of-two alignment... ");
+    assert(bn_gguf_open(non_pow2_alignment_path) == NULL);
+    assert(unlink(non_pow2_alignment_path) == 0);
     printf("OK\n");
 
     char wrong_type_alignment_path[] = "/tmp/bn_gguf_open_wrong_type_align_XXXXXX";

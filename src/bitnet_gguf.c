@@ -384,8 +384,9 @@ bn_gguf_t *bn_gguf_open(const char *path) {
     }
 
     size_t header_size = (size_t)(reader.ptr - reader.base);
-    if (g->alignment == 0) {
-        fprintf(stderr, "bn_gguf_open: invalid alignment 0\n");
+    if (g->alignment == 0 || (g->alignment & (g->alignment - 1)) != 0) {
+        fprintf(stderr, "bn_gguf_open: invalid alignment %u (must be a power of two)\n",
+                g->alignment);
         goto fail_g;
     }
     size_t pad = (g->alignment - (header_size % g->alignment)) % g->alignment;
