@@ -671,13 +671,34 @@ int bitnet_tokenize(bitnet_ctx_t *ctx, const char *text,
 }
 
 char *bitnet_detokenize(bitnet_ctx_t *ctx, const int *tokens, int n) {
-    if (!ctx || !ctx->tokenizer) return NULL;
-    if (n > 0 && !tokens) return NULL;
+    if (!ctx || !ctx->tokenizer) {
+        fprintf(stderr, "bitnet_detokenize: ctx or tokenizer is NULL\n");
+        return NULL;
+    }
+    if (n < 0) {
+        fprintf(stderr, "bitnet_detokenize: negative token count\n");
+        return NULL;
+    }
+    if (n > 0 && !tokens) {
+        fprintf(stderr, "bitnet_detokenize: tokens is NULL with n > 0\n");
+        return NULL;
+    }
     return bn_detokenize(ctx->tokenizer, tokens, n);
 }
 
 int bitnet_sample_token(bitnet_ctx_t *ctx, float *logits) {
-    if (!ctx || !ctx->model || !logits) return -1;
+    if (!ctx) {
+        fprintf(stderr, "bitnet_sample_token: ctx is NULL\n");
+        return -1;
+    }
+    if (!ctx->model) {
+        fprintf(stderr, "bitnet_sample_token: model is NULL\n");
+        return -1;
+    }
+    if (!logits) {
+        fprintf(stderr, "bitnet_sample_token: logits is NULL\n");
+        return -1;
+    }
     return bn_sample(&ctx->sampler, logits, ctx->model->n_vocab);
 }
 
@@ -884,7 +905,27 @@ int bitnet_generate(bitnet_ctx_t *ctx, const int *prompt, int n_prompt,
                     void (*callback)(int token, const char *text, void *ud),
                     void *userdata)
 {
+    if (!ctx) {
+        fprintf(stderr, "bitnet_generate: ctx is NULL\n");
+        return -1;
+    }
+    if (!ctx->tokenizer) {
+        fprintf(stderr, "bitnet_generate: tokenizer is NULL\n");
+        return -1;
+    }
+    if (!ctx->model) {
+        fprintf(stderr, "bitnet_generate: model is NULL\n");
+        return -1;
+    }
     if (n_prompt <= 0) return 0;
+    if (!prompt) {
+        fprintf(stderr, "bitnet_generate: prompt is NULL with n_prompt > 0\n");
+        return -1;
+    }
+    if (n_predict < 0) {
+        fprintf(stderr, "bitnet_generate: negative n_predict\n");
+        return -1;
+    }
 
     int eos = bn_token_eos(ctx->tokenizer);
     int generated = 0;

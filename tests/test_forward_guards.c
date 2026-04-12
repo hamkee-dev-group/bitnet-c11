@@ -858,6 +858,61 @@ static void test_ffn_sub_norm_uses_n_ff_dimension(void) {
     free_ffn_norm_fixture(&fx);
 }
 
+static void test_bitnet_detokenize_rejects_negative_count(void) {
+    tiny_fixture_t fx;
+    init_tiny_fixture(&fx, 4);
+    int tokens[] = {0};
+    printf("Test 27: bitnet_detokenize rejects negative count... ");
+    assert(bitnet_detokenize(&fx.ctx, tokens, -1) == NULL);
+    printf("OK\n");
+    free_tiny_fixture(&fx);
+}
+
+static void test_generate_rejects_null_ctx(void) {
+    printf("Test 28: bitnet_generate rejects NULL ctx... ");
+    assert(bitnet_generate(NULL, NULL, 0, 0, NULL, NULL) == -1);
+    printf("OK\n");
+}
+
+static void test_generate_rejects_null_tokenizer(void) {
+    bitnet_ctx_t ctx;
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.tokenizer = NULL;
+    printf("Test 29: bitnet_generate rejects NULL tokenizer... ");
+    assert(bitnet_generate(&ctx, NULL, 0, 0, NULL, NULL) == -1);
+    printf("OK\n");
+}
+
+static void test_generate_rejects_null_model(void) {
+    tiny_fixture_t fx;
+    init_tiny_fixture(&fx, 4);
+    fx.ctx.model = NULL;
+    printf("Test 30: bitnet_generate rejects NULL model... ");
+    assert(bitnet_generate(&fx.ctx, NULL, 0, 0, NULL, NULL) == -1);
+    printf("OK\n");
+    fx.ctx.model = &fx.model;
+    free_tiny_fixture(&fx);
+}
+
+static void test_generate_rejects_null_prompt_with_positive_count(void) {
+    tiny_fixture_t fx;
+    init_tiny_fixture(&fx, 4);
+    printf("Test 31: bitnet_generate rejects NULL prompt with n_prompt > 0... ");
+    assert(bitnet_generate(&fx.ctx, NULL, 5, 1, NULL, NULL) == -1);
+    printf("OK\n");
+    free_tiny_fixture(&fx);
+}
+
+static void test_generate_rejects_negative_predict(void) {
+    tiny_fixture_t fx;
+    init_tiny_fixture(&fx, 4);
+    int prompt[] = {0};
+    printf("Test 32: bitnet_generate rejects negative n_predict... ");
+    assert(bitnet_generate(&fx.ctx, prompt, 1, -1, NULL, NULL) == -1);
+    printf("OK\n");
+    free_tiny_fixture(&fx);
+}
+
 int main(void) {
     printf("=== Forward Guard Tests ===\n\n");
 
@@ -889,6 +944,12 @@ int main(void) {
     test_bn_token_text_rejects_invalid_id();
     test_sampler_init_short_read_fills_all_state();
     test_ffn_sub_norm_uses_n_ff_dimension();
+    test_bitnet_detokenize_rejects_negative_count();
+    test_generate_rejects_null_ctx();
+    test_generate_rejects_null_tokenizer();
+    test_generate_rejects_null_model();
+    test_generate_rejects_null_prompt_with_positive_count();
+    test_generate_rejects_negative_predict();
 
     printf("\n=== All forward guard tests passed ===\n");
     return 0;
