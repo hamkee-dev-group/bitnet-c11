@@ -5,7 +5,7 @@
 void bn_i2s_gemv_scalar(const uint8_t *weights, const int8_t *acts,
                         float *out, int n_rows, int n_cols)
 {
-    int row_bytes = n_cols / 4;
+    int row_bytes = bn_i2s_row_stride(n_cols);
 
     for (int row = 0; row < n_rows; row++) {
         const uint8_t *w = weights + row * row_bytes;

@@ -23,7 +23,7 @@ void bn_i2s_gemv_avx2(const uint8_t *weights, const int8_t *acts,
     const int nb = n_cols / QK_I2_S;
     const int group32_num = nb / 32;
     const int la_num = nb % 32;
-    const int row_bytes = n_cols / 4;
+    const int row_bytes = bn_i2s_row_stride(n_cols);
 
     __m256i mask  = _mm256_set1_epi8(0x03);
     __m256i one16 = _mm256_set1_epi16(1);
@@ -120,7 +120,33 @@ void bn_i2s_gemv_avx2(const uint8_t *weights, const int8_t *acts,
                 _mm256_madd_epi16(accula, one16));
         }
 
-        out[row] = (float)hsum_i32_8(accu);
+        int32_t result = hsum_i32_8(accu);
+
+        /* Scalar fallback for the tail when n_cols is not a multiple of 128 */
+        int tail = n_cols - nb * QK_I2_S;
+        if (tail > 0) {
+            const uint8_t *tw = x + (size_t)nb * 32;
+            const int8_t  *ta = acts + (size_t)nb * QK_I2_S;
+            int cols0 = tail >= 32  ? 32 : tail;
+            int cols1 = tail >= 64  ? 32 : (tail > 32  ? tail - 32  : 0);
+            int cols2 = tail >= 96  ? 32 : (tail > 64  ? tail - 64  : 0);
+            int cols3 = tail >= 128 ? 32 : (tail > 96  ? tail - 96  : 0);
+
+            for (int j = 0; j < 32; j++) {
+                uint8_t b = tw[j];
+                int8_t w0 = (int8_t)((b >> 6) & 0x03);
+                int8_t w1 = (int8_t)((b >> 4) & 0x03);
+                int8_t w2 = (int8_t)((b >> 2) & 0x03);
+                int8_t w3 = (int8_t)((b >> 0) & 0x03);
+
+                if (j < cols0) result += w0 * (int32_t)ta[0*32 + j];
+                if (j < cols1) result += w1 * (int32_t)ta[1*32 + j];
+                if (j < cols2) result += w2 * (int32_t)ta[2*32 + j];
+                if (j < cols3) result += w3 * (int32_t)ta[3*32 + j];
+            }
+        }
+
+        out[row] = (float)result;
     }
 }
 

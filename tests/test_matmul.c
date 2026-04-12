@@ -8,7 +8,7 @@
 #include <assert.h>
 
 static uint8_t *pack_test_weights(const int8_t *vals, int n_rows, int n_cols) {
-    int row_bytes = n_cols / 4;
+    int row_bytes = bn_i2s_row_stride(n_cols);
     uint8_t *packed = (uint8_t *)calloc(1, (size_t)n_rows * row_bytes + 32);
 
     for (int row = 0; row < n_rows; row++) {
@@ -193,6 +193,33 @@ static void test_i16_overflow(void) {
     printf("  OK\n");
 }
 
+static void test_tail_width(int N) {
+    printf("Test: tail width n_cols=%d...\n", N);
+    int8_t *wvals = (int8_t *)calloc((size_t)N, sizeof(int8_t));
+    int8_t *acts  = (int8_t *)calloc((size_t)N, sizeof(int8_t));
+
+    for (int i = 0; i < N; i++) {
+        wvals[i] = (int8_t)((i % 3) - 1);
+        acts[i]  = (int8_t)(1 + (i % 5));
+    }
+
+    uint8_t *packed = pack_test_weights(wvals, 1, N);
+
+    float out_s;
+    bn_i2s_gemv_scalar(packed, acts, &out_s, 1, N);
+    printf("  Scalar: raw=%.0f\n", out_s);
+
+#if defined(__AVX2__)
+    float out_a;
+    bn_i2s_gemv_avx2(packed, acts, &out_a, 1, N);
+    printf("  AVX2:   raw=%.0f\n", out_a);
+    assert(fabsf(out_a - out_s) < 0.5f);
+#endif
+
+    free(wvals); free(acts); free(packed);
+    printf("  OK\n");
+}
+
 int main(void) {
     printf("=== Matmul Kernel Tests ===\n\n");
     test_basic();
@@ -200,6 +227,9 @@ int main(void) {
     test_multirow();
     test_quantize();
     test_i16_overflow();
+    test_tail_width(32);
+    test_tail_width(96);
+    test_tail_width(160);
     printf("\n=== All matmul tests passed ===\n");
     return 0;
 }

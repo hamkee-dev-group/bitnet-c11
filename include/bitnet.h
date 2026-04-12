@@ -124,6 +124,11 @@ int             bn_token_eos(bn_tokenizer_t *t);
  * thread. Token IDs outside the tokenizer vocabulary return `""`. */
 const char     *bn_token_text(bn_tokenizer_t *t, int id);
 
+/* I2_S row stride: 32 bytes per ceil(n_cols/128) block. */
+static inline int bn_i2s_row_stride(int n_cols) {
+    return ((n_cols + 127) / 128) * 32;
+}
+
 void bn_quantize_acts(const float *src, int8_t *dst, int n,
                       float *scale_out, int32_t *sum_out);
 void bn_dequant_i2s(const uint8_t *packed, float *dst, int n,

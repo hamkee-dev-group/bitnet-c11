@@ -201,7 +201,7 @@ typedef struct {
 
 static void *bn_gemv_thread(void *arg) {
     bn_gemv_task_t *task = (bn_gemv_task_t *)arg;
-    int row_bytes = task->n_cols / 4;
+    int row_bytes = bn_i2s_row_stride(task->n_cols);
     task->gemv(task->weights + (size_t)task->row_start * row_bytes,
                task->acts,
                task->out + task->row_start,
@@ -343,7 +343,7 @@ static void bn_matmul_f32(float *out, const float *w,
 
 static float bn_get_i2s_weight_scale(const void *data, int n_rows, int n_cols) {
     const float *sp = (const float *)((const uint8_t *)data +
-                                       (size_t)n_rows * (size_t)n_cols / 4);
+                                       (size_t)n_rows * (size_t)bn_i2s_row_stride(n_cols));
     return sp[0];
 }
 
