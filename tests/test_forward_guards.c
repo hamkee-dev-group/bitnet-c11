@@ -903,6 +903,122 @@ static void test_generate_rejects_null_prompt_with_positive_count(void) {
     free_tiny_fixture(&fx);
 }
 
+/* --- GGUF fixture helpers for model invariant tests --- */
+
+static void invariant_write_u32(FILE *fp, uint32_t v) {
+    assert(fwrite(&v, sizeof(v), 1, fp) == 1);
+}
+
+static void invariant_write_u64(FILE *fp, uint64_t v) {
+    assert(fwrite(&v, sizeof(v), 1, fp) == 1);
+}
+
+static void invariant_write_str(FILE *fp, const char *s) {
+    uint64_t len = strlen(s);
+    invariant_write_u64(fp, len);
+    assert(fwrite(s, 1, len, fp) == len);
+}
+
+static void invariant_write_f32(FILE *fp, float v) {
+    assert(fwrite(&v, sizeof(v), 1, fp) == 1);
+}
+
+/*
+ * Create a minimal GGUF file with the given model hyperparameters.
+ * No tensors are written — the invariant guards fire before tensor loading.
+ */
+static void create_invariant_gguf(const char *path,
+                                  uint32_t n_embd, uint32_t n_head,
+                                  uint32_t n_head_kv) {
+    FILE *fp = fopen(path, "wb");
+    assert(fp);
+
+    /* GGUF magic, version 3, 0 tensors, 11 KV pairs */
+    assert(fwrite("GGUF", 1, 4, fp) == 4);
+    invariant_write_u32(fp, 3);
+    invariant_write_u64(fp, 0);
+    invariant_write_u64(fp, 11);
+
+    invariant_write_str(fp, "general.architecture");
+    invariant_write_u32(fp, BN_GGUF_TYPE_STRING);
+    invariant_write_str(fp, "bitnet-b1.58");
+
+    invariant_write_str(fp, "general.alignment");
+    invariant_write_u32(fp, BN_GGUF_TYPE_UINT32);
+    invariant_write_u32(fp, 32);
+
+    invariant_write_str(fp, "bitnet-b1.58.vocab_size");
+    invariant_write_u32(fp, BN_GGUF_TYPE_UINT32);
+    invariant_write_u32(fp, 4);
+
+    invariant_write_str(fp, "bitnet-b1.58.embedding_length");
+    invariant_write_u32(fp, BN_GGUF_TYPE_UINT32);
+    invariant_write_u32(fp, n_embd);
+
+    invariant_write_str(fp, "bitnet-b1.58.block_count");
+    invariant_write_u32(fp, BN_GGUF_TYPE_UINT32);
+    invariant_write_u32(fp, 1);
+
+    invariant_write_str(fp, "bitnet-b1.58.attention.head_count");
+    invariant_write_u32(fp, BN_GGUF_TYPE_UINT32);
+    invariant_write_u32(fp, n_head);
+
+    invariant_write_str(fp, "bitnet-b1.58.attention.head_count_kv");
+    invariant_write_u32(fp, BN_GGUF_TYPE_UINT32);
+    invariant_write_u32(fp, n_head_kv);
+
+    invariant_write_str(fp, "bitnet-b1.58.feed_forward_length");
+    invariant_write_u32(fp, BN_GGUF_TYPE_UINT32);
+    invariant_write_u32(fp, 128);
+
+    invariant_write_str(fp, "bitnet-b1.58.context_length");
+    invariant_write_u32(fp, BN_GGUF_TYPE_UINT32);
+    invariant_write_u32(fp, 8);
+
+    invariant_write_str(fp, "bitnet-b1.58.attention.layer_norm_rms_epsilon");
+    invariant_write_u32(fp, BN_GGUF_TYPE_FLOAT32);
+    invariant_write_f32(fp, 1e-5f);
+
+    invariant_write_str(fp, "bitnet-b1.58.rope.freq_base");
+    invariant_write_u32(fp, BN_GGUF_TYPE_FLOAT32);
+    invariant_write_f32(fp, 10000.0f);
+
+    fclose(fp);
+}
+
+static void test_model_load_rejects_n_embd_not_divisible_by_n_head(void) {
+    const char *path = "/tmp/test_invariant_embd_head.gguf";
+    /* n_embd=130 is not divisible by n_head=4 */
+    create_invariant_gguf(path, 130, 4, 4);
+    printf("Test 33: model_load rejects n_embd %% n_head != 0... ");
+    bitnet_model_t *m = bitnet_model_load(path);
+    assert(m == NULL);
+    unlink(path);
+    printf("OK\n");
+}
+
+static void test_model_load_rejects_n_head_not_divisible_by_n_head_kv(void) {
+    const char *path = "/tmp/test_invariant_head_kv.gguf";
+    /* n_head=4 is not divisible by n_head_kv=3 */
+    create_invariant_gguf(path, 128, 4, 3);
+    printf("Test 34: model_load rejects n_head %% n_head_kv != 0... ");
+    bitnet_model_t *m = bitnet_model_load(path);
+    assert(m == NULL);
+    unlink(path);
+    printf("OK\n");
+}
+
+static void test_model_load_rejects_odd_head_dim(void) {
+    const char *path = "/tmp/test_invariant_odd_head.gguf";
+    /* n_embd=6, n_head=2 → n_embd_head=3 (odd) */
+    create_invariant_gguf(path, 6, 2, 2);
+    printf("Test 35: model_load rejects odd n_embd_head... ");
+    bitnet_model_t *m = bitnet_model_load(path);
+    assert(m == NULL);
+    unlink(path);
+    printf("OK\n");
+}
+
 static void test_generate_rejects_negative_predict(void) {
     tiny_fixture_t fx;
     init_tiny_fixture(&fx, 4);
@@ -950,6 +1066,9 @@ int main(void) {
     test_generate_rejects_null_model();
     test_generate_rejects_null_prompt_with_positive_count();
     test_generate_rejects_negative_predict();
+    test_model_load_rejects_n_embd_not_divisible_by_n_head();
+    test_model_load_rejects_n_head_not_divisible_by_n_head_kv();
+    test_model_load_rejects_odd_head_dim();
 
     printf("\n=== All forward guard tests passed ===\n");
     return 0;
