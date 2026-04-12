@@ -1185,6 +1185,9 @@ float *bitnet_forward(bitnet_ctx_t *ctx, const int *tokens, int n_tokens,
         ctx->kv_len = pos + 1;
     }
 
+    if (!compute_logits || n_tokens == 0)
+        return NULL;
+
     return ctx->logits_buf;
 }
 
@@ -1221,8 +1224,11 @@ int bitnet_generate(bitnet_ctx_t *ctx, const int *prompt, int n_prompt,
     float *logits = NULL;
     for (int i = 0; i < n_prompt; i++) {
         bool need_logits = (i == n_prompt - 1);
-        logits = bitnet_forward(ctx, &prompt[i], 1, need_logits);
-        if (!logits) return -1;
+        int kv_before = ctx->kv_len;
+        float *ret = bitnet_forward(ctx, &prompt[i], 1, need_logits);
+        if (need_logits && !ret) return -1;
+        if (!need_logits && ctx->kv_len == kv_before) return -1;
+        if (ret) logits = ret;
     }
 
     for (int i = 0; i < n_predict; i++) {

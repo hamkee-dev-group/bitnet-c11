@@ -98,14 +98,18 @@ int main(int argc, char **argv) {
         double t0 = now_sec();
         for (int i = 0; i < n; i++) {
             bool need_logits = (i == n - 1);
-            logits = bitnet_forward(ctx, &tokens[i], 1, need_logits);
-            if (!logits) {
+            int kv_before = ctx->kv_len;
+            float *ret = bitnet_forward(ctx, &tokens[i], 1, need_logits);
+            if ((need_logits && !ret) ||
+                (!need_logits && ctx->kv_len == kv_before)) {
                 fprintf(stderr,
-                        "Prompt processing benchmark failed at token %d\n", i);
+                        "Prompt processing benchmark failed at token %d\n",
+                        i);
                 bitnet_ctx_free(ctx);
                 bitnet_model_free(model);
                 return 1;
             }
+            if (ret) logits = ret;
         }
         double t1 = now_sec();
         double pp_time = t1 - t0;

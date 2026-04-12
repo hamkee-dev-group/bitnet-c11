@@ -849,10 +849,12 @@ static void test_ffn_sub_norm_uses_n_ff_dimension(void) {
     init_ffn_norm_fixture(&fx, 4);
 
     int token = 0;
-    float *logits = bitnet_forward(&fx.ctx, &token, 1, false);
+    /* compute_logits=false: we just want to verify the forward pass
+       completes without crashing when n_ff != n_embd. */
+    float *ret = bitnet_forward(&fx.ctx, &token, 1, false);
 
     printf("Test 24: ffn_sub_norm indexed with n_ff dimension (n_ff != n_embd)... ");
-    assert(logits != NULL);
+    assert(ret == NULL);  /* no logits requested → NULL */
     printf("OK\n");
 
     free_ffn_norm_fixture(&fx);
@@ -1029,6 +1031,76 @@ static void test_generate_rejects_negative_predict(void) {
     free_tiny_fixture(&fx);
 }
 
+static void test_forward_no_logits_returns_null(void) {
+    printf("Test 36: forward(compute_logits=false) returns NULL... ");
+    tiny_fixture_t fx;
+    init_tiny_fixture(&fx, 4);
+
+    /* First call with logits to fill the buffer with known data. */
+    int token = 1;
+    float *logits = bitnet_forward(&fx.ctx, &token, 1, true);
+    assert(logits != NULL);
+
+    /* Second call without logits must return NULL, not the stale buffer. */
+    float *stale = bitnet_forward(&fx.ctx, &token, 1, false);
+    assert(stale == NULL);
+    printf("OK\n");
+
+    free_tiny_fixture(&fx);
+}
+
+static void test_forward_zero_tokens_returns_null(void) {
+    printf("Test 37: forward(n_tokens=0) returns NULL... ");
+    tiny_fixture_t fx;
+    init_tiny_fixture(&fx, 4);
+
+    /* Seed the logits buffer. */
+    int token = 1;
+    float *logits = bitnet_forward(&fx.ctx, &token, 1, true);
+    assert(logits != NULL);
+
+    /* Zero-token call must not hand back stale logits. */
+    float *ret = bitnet_forward(&fx.ctx, NULL, 0, true);
+    assert(ret == NULL);
+    printf("OK\n");
+
+    free_tiny_fixture(&fx);
+}
+
+static void test_forward_last_token_logits_f32_output(void) {
+    printf("Test 38: forward last-token logits with f32 output... ");
+    tiny_fixture_t fx;
+    init_tiny_fixture(&fx, 4);
+
+    /* The tiny fixture uses output_is_i2s = false (f32 matmul path).
+       Forward one token requesting logits and verify non-NULL. */
+    int token = 1;
+    float *logits = bitnet_forward(&fx.ctx, &token, 1, true);
+    assert(logits != NULL);
+    printf("OK\n");
+
+    free_tiny_fixture(&fx);
+}
+
+static void test_forward_last_token_logits_i2s_output(void) {
+    printf("Test 39: forward last-token logits with i2s output... ");
+    cache_guard_fixture_t fx;
+    init_cache_guard_fixture(&fx, 4);
+
+    /* Switch to tied-output (i2s) path. */
+    fx.model.output_is_i2s = true;
+    fx.model.output_i2s = fx.zero_weights;
+    fx.model.output_wscale = 1.0f;
+    fx.model.output_scale = 1.0f;
+
+    int token = 1;
+    float *logits = bitnet_forward(&fx.ctx, &token, 1, true);
+    assert(logits != NULL);
+    printf("OK\n");
+
+    free_cache_guard_fixture(&fx);
+}
+
 int main(void) {
     printf("=== Forward Guard Tests ===\n\n");
 
@@ -1069,6 +1141,10 @@ int main(void) {
     test_model_load_rejects_n_embd_not_divisible_by_n_head();
     test_model_load_rejects_n_head_not_divisible_by_n_head_kv();
     test_model_load_rejects_odd_head_dim();
+    test_forward_no_logits_returns_null();
+    test_forward_zero_tokens_returns_null();
+    test_forward_last_token_logits_f32_output();
+    test_forward_last_token_logits_i2s_output();
 
     printf("\n=== All forward guard tests passed ===\n");
     return 0;
