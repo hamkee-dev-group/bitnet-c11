@@ -221,8 +221,8 @@ static void test_tail_width(int N) {
 }
 
 static void test_multirow_non128(void) {
-    printf("Test: multi-row GEMV with non-128 width (12x384)...\n");
-    int ROWS = 12, COLS = 384;
+    printf("Test: multi-row GEMV with non-128 width (12x448)...\n");
+    int ROWS = 12, COLS = 448;
     int8_t *wvals = (int8_t *)calloc((size_t)ROWS * COLS, sizeof(int8_t));
     int8_t *acts  = (int8_t *)calloc((size_t)COLS, sizeof(int8_t));
 
@@ -307,6 +307,8 @@ int main(void) {
     test_tail_width(32);
     test_tail_width(96);
     test_tail_width(160);
+    test_tail_width(192);
+    test_tail_width(448);
     test_threaded_gemv();
     printf("\n=== All matmul tests passed ===\n");
     return 0;

@@ -17,6 +17,9 @@ static inline int hsum_i32_8(const __m256i a) {
     return _mm_cvtsi128_si32(_mm_add_epi32(sum64, hi32));
 }
 
+/* n_cols need not be a multiple of QK_I2_S (128).  The main loop processes
+ * nb = n_cols / 128 full blocks via AVX2; any remaining columns (n_cols % 128)
+ * are handled by the scalar tail at the end of each row. */
 void bn_i2s_gemv_avx2(const uint8_t *weights, const int8_t *acts,
                       float *out, int n_rows, int n_cols)
 {
