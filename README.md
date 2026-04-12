@@ -29,7 +29,8 @@ huggingface-cli download microsoft/BitNet-b1.58-2B-4T-gguf \
 # https://huggingface.co/microsoft/BitNet-b1.58-2B-4T-gguf
 ```
 
-The model file you need is `ggml-model-i2_s.gguf`.
+The model file is `ggml-model-i2_s.gguf` inside the downloaded directory
+(e.g. `models/BitNet-b1.58-2B-4T/ggml-model-i2_s.gguf`).
 
 ## Build
 
@@ -43,7 +44,7 @@ Requires a C11 compiler (gcc, clang) and pthreads. That's it.
 ## Usage
 
 ```sh
-./bitnet_cli -m models/ggml-model-i2_s.gguf -p "The meaning of life is" -n 50 -t 4
+./bitnet_cli -m models/BitNet-b1.58-2B-4T/ggml-model-i2_s.gguf -p "The meaning of life is" -n 50 -t 4
 ```
 
 **Options:**
@@ -66,7 +67,7 @@ Unit tests cover the GGUF parser, matmul kernels (scalar + AVX2), and tokenizer.
 They require a model file &mdash; set `BITNET_MODEL` to point at it:
 
 ```sh
-export BITNET_MODEL=/path/to/ggml-model-i2_s.gguf
+export BITNET_MODEL=models/BitNet-b1.58-2B-4T/ggml-model-i2_s.gguf
 
 make test               # GGUF parser, matmul kernels, tokenizer
 make test_vs_reference  # compare output against llama.cpp (optional)
@@ -78,50 +79,45 @@ The matmul test (`test_matmul`) is self-contained and does not need a model file
 
 `test_vs_reference` compares bitnet-c11 against Microsoft's llama.cpp-based implementation.
 It verifies tokenizer equivalence, output coherence, performance, and determinism.
-Requires `llama-cli` and `llama-tokenize` on `$PATH` (or set `LLAMA_CLI` / `LLAMA_TOKENIZE`):
-
-```sh
-export LLAMA_CLI=/path/to/llama-cli
-export LLAMA_TOKENIZE=/path/to/llama-tokenize
-./test_vs_reference
-```
+Requires `llama-cli` and `llama-tokenize` on `$PATH` (or set `LLAMA_CLI` / `LLAMA_TOKENIZE`).
 
 ## Benchmark
 
 ```sh
-make bench BITNET_MODEL=/path/to/ggml-model-i2_s.gguf
+make bench BITNET_MODEL=models/BitNet-b1.58-2B-4T/ggml-model-i2_s.gguf
 ```
 
 ### llama.cpp Comparison
 
-`make compare` runs a consolidated benchmark against llama.cpp and outputs
-structured JSON with prompt eval and generation metrics for both engines:
+`make compare` benchmarks bitnet-c11 and llama.cpp side-by-side on the same
+prompt, thread count, and generation length, then emits structured JSON to
+stdout and a human-readable summary to stderr:
 
 ```sh
-export BITNET_MODEL=/path/to/ggml-model-i2_s.gguf
-export LLAMA_CLI=/path/to/llama-cli       # or ensure llama-cli is on $PATH
-make compare
+export BITNET_MODEL=models/BitNet-b1.58-2B-4T/ggml-model-i2_s.gguf
+export LLAMA_CLI=/path/to/llama-cli   # or ensure llama-cli is on $PATH
+make compare                          # summary on stderr, JSON on stdout
+make compare > comparison.json        # save the JSON artifact
 ```
 
-The tool exits non-zero if the model file is missing or `llama-cli` is not found.
-JSON output goes to stdout; progress and a human-readable summary go to stderr.
-Redirect stdout to capture the artifact:
-
-```sh
-make compare > comparison.json
-```
+The runner exits non-zero if the model file or `llama-cli` is missing.
+See `tools/compare_llama.c` for the full methodology (greedy decoding,
+32-token generation, 4 threads, `CLOCK_MONOTONIC` timing).
 
 ## Performance
 
-On a 4-core Xeon E-2224G with AVX2 (single-socket, no GPU):
+Measured with `make compare` on a 4-core Xeon E-2224G (AVX2, single-socket,
+no GPU), BitNet-b1.58-2B-4T model, greedy decoding, 4 threads:
 
-| Metric | bitnet-c11 | llama.cpp (reference) |
-|--------|------------|----------------------|
-| Generation | 7.7 tok/s | 6.9 tok/s |
-| Prompt eval | ~15 tok/s | ~12 tok/s |
+| Metric | bitnet-c11 | llama.cpp | Speedup |
+|--------|------------|-----------|---------|
+| Prompt eval | ~15 tok/s | ~12 tok/s | ~1.25x |
+| Generation | 7.7 tok/s | 6.9 tok/s | ~1.12x |
 
-bitnet-c11 is competitive with (and slightly faster than) the reference C++
-implementation for this model, likely due to lower framework overhead.
+To reproduce, run `make compare` with `BITNET_MODEL` pointing at
+`models/BitNet-b1.58-2B-4T/ggml-model-i2_s.gguf` and `LLAMA_CLI` pointing
+at a llama.cpp build. Full JSON results go to stdout; redirect to a file to
+keep them.
 
 ## Architecture
 
