@@ -6,6 +6,8 @@ LDFLAGS  := -lm -lpthread
 # SIMD selection: make SIMD=avx2 (or avx512, neon, scalar)
 SIMD     ?= avx2
 
+BITNET_MODEL ?= models/BitNet-b1.58-2B-4T/ggml-model-i2_s.gguf
+
 ifeq ($(SIMD),avx2)
     CFLAGS += -mavx2 -mfma
     MATMUL_SRC = src/bitnet_matmul_avx2.c src/bitnet_matmul_scalar.c

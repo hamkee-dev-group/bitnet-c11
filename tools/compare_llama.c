@@ -8,7 +8,7 @@
 #include <unistd.h>
 
 #ifndef MODEL_PATH
-#define MODEL_PATH "models/ggml-model-i2_s.gguf"
+#define MODEL_PATH "models/BitNet-b1.58-2B-4T/ggml-model-i2_s.gguf"
 #endif
 #ifndef LLAMA_CLI_DEFAULT
 #define LLAMA_CLI_DEFAULT "llama-cli"
