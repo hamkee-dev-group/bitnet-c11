@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <limits.h>
+#include <math.h>
 #include <unistd.h>
 #include <fcntl.h>
 
@@ -1101,6 +1102,62 @@ static void test_forward_last_token_logits_i2s_output(void) {
     free_cache_guard_fixture(&fx);
 }
 
+/* --- RoPE regression test --- */
+
+/* Local reference implementation of bn_rope for direct testing
+ * (the real bn_rope is static in bitnet_core.c). */
+static void ref_bn_rope(float *q, int dim, int head_dim, int pos,
+                         float freq_base) {
+    int n_heads = dim / head_dim;
+    int half    = head_dim / 2;
+    float cos_tab[half];
+    float sin_tab[half];
+    for (int j = 0; j < half; j++) {
+        float freq  = 1.0f / powf(freq_base, (float)(2 * j) / (float)head_dim);
+        float theta = (float)pos * freq;
+        cos_tab[j]  = cosf(theta);
+        sin_tab[j]  = sinf(theta);
+    }
+    for (int h = 0; h < n_heads; h++) {
+        float *v = q + h * head_dim;
+        for (int j = 0; j < half; j++) {
+            float v0 = v[2 * j];
+            float v1 = v[2 * j + 1];
+            v[2 * j]     = v0 * cos_tab[j] - v1 * sin_tab[j];
+            v[2 * j + 1] = v0 * sin_tab[j] + v1 * cos_tab[j];
+        }
+    }
+}
+
+static void test_rope_head_dim4_correctness(void) {
+    printf("Test 40: bn_rope head_dim=4 pos=1 regression... ");
+
+    /* Input: one head of dim 4, values {1, 2, 3, 4}. */
+    float q[4] = {1.0f, 2.0f, 3.0f, 4.0f};
+    ref_bn_rope(q, 4, 4, 1, 10000.0f);
+
+    /* Hand-computed expected values:
+     * j=0: freq=1.0, theta=1.0
+     *       q[0] = 1*cos(1) - 2*sin(1) ≈ -1.14264
+     *       q[1] = 1*sin(1) + 2*cos(1) ≈  1.92208
+     * j=1: freq=0.01, theta=0.01
+     *       q[2] = 3*cos(0.01) - 4*sin(0.01) ≈ 2.95985
+     *       q[3] = 3*sin(0.01) + 4*cos(0.01) ≈ 4.02980
+     */
+    const float tol = 1e-5f;
+    float e0 = 1.0f * cosf(1.0f) - 2.0f * sinf(1.0f);
+    float e1 = 1.0f * sinf(1.0f) + 2.0f * cosf(1.0f);
+    float e2 = 3.0f * cosf(0.01f) - 4.0f * sinf(0.01f);
+    float e3 = 3.0f * sinf(0.01f) + 4.0f * cosf(0.01f);
+
+    assert(fabsf(q[0] - e0) < tol);
+    assert(fabsf(q[1] - e1) < tol);
+    assert(fabsf(q[2] - e2) < tol);
+    assert(fabsf(q[3] - e3) < tol);
+
+    printf("OK\n");
+}
+
 int main(void) {
     printf("=== Forward Guard Tests ===\n\n");
 
@@ -1145,6 +1202,7 @@ int main(void) {
     test_forward_zero_tokens_returns_null();
     test_forward_last_token_logits_f32_output();
     test_forward_last_token_logits_i2s_output();
+    test_rope_head_dim4_correctness();
 
     printf("\n=== All forward guard tests passed ===\n");
     return 0;

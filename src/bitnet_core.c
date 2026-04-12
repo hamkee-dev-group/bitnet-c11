@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include "bitnet.h"
+#include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -55,6 +56,7 @@ static void bn_rmsnorm_inplace(float *x, const float *w, int n, float eps) {
 }
 
 static void bn_rope(float *q, int dim, int head_dim, int pos, float freq_base) {
+    assert(head_dim > 0 && head_dim % 2 == 0 && "bn_rope: head_dim must be positive and even");
     int n_heads = dim / head_dim;
     int half = head_dim / 2;
 
