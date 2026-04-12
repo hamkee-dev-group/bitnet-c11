@@ -235,6 +235,10 @@ static int run_model_bench(const char *model_path, int n_threads) {
     if (!ctx) { fprintf(stderr, "Failed to create context\n"); return 1; }
 
     float *logits = NULL;
+    int pp_tokens = 0;
+    double pp_time = 0.0;
+    int tg_tokens = 0;
+    double tg_time = 0.0;
 
     fprintf(stderr, "\n--- Prompt Processing Benchmark ---\n");
     double pp_attn_time = 0.0;
@@ -266,7 +270,8 @@ static int run_model_bench(const char *model_path, int n_threads) {
             if (ret) logits = ret;
         }
         double t1 = now_sec();
-        double pp_time = t1 - t0;
+        pp_time = t1 - t0;
+        pp_tokens = n;
         pp_attn_time = bitnet_attn_time_reset(ctx);
         fprintf(stderr, "Prompt processing: %.2f ms (%.1f tokens/sec)\n",
                 pp_time * 1000, (double)n / pp_time);
@@ -305,7 +310,8 @@ static int run_model_bench(const char *model_path, int n_threads) {
         }
 
         double t1 = now_sec();
-        double tg_time = t1 - t0;
+        tg_time = t1 - t0;
+        tg_tokens = gen_count;
         tg_attn_time = bitnet_attn_time_reset(ctx);
         fprintf(stderr, "Token generation: %d tokens in %.2f ms (%.2f tokens/sec)\n",
                 gen_count, tg_time * 1000, (double)gen_count / tg_time);
@@ -321,7 +327,11 @@ static int run_model_bench(const char *model_path, int n_threads) {
            (int)((long)model->n_embd * model->n_vocab / 1000000 +
                   (long)model->n_layer * (4 * (long)model->n_embd * model->n_embd +
                    3 * (long)model->n_ff * model->n_embd) / 1000000));
+    printf("  \"pp_tokens\": %d,\n", pp_tokens);
+    printf("  \"pp_tok_s\": %.2f,\n", pp_time > 0 ? (double)pp_tokens / pp_time : 0.0);
     printf("  \"pp_attn_ms\": %.2f,\n", pp_attn_time * 1000);
+    printf("  \"tg_tokens\": %d,\n", tg_tokens);
+    printf("  \"tg_tok_s\": %.2f,\n", tg_time > 0 ? (double)tg_tokens / tg_time : 0.0);
     printf("  \"tg_attn_ms\": %.2f,\n", tg_attn_time * 1000);
     printf("  \"engine\": \"bitnet-c11\"\n");
     printf("}\n");

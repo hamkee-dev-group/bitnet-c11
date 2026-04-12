@@ -402,8 +402,10 @@ static void run_bench_fixture_error_case(const char *label, const char *expected
 static void run_bench_fixture_success_case(const char *label) {
     char model_path[] = "/tmp/bitnet-bench-fixture-XXXXXX";
     char stderr_path[] = "/tmp/bitnet-bench-stderr-XXXXXX";
+    char stdout_path[] = "/tmp/bitnet-bench-stdout-XXXXXX";
     char cmd[1024];
     char stderr_buf[4096];
+    char stdout_buf[4096];
     int fd;
     int status;
     static const bench_fixture_config_t config = {
@@ -420,8 +422,12 @@ static void run_bench_fixture_success_case(const char *label) {
     assert(fd >= 0);
     close(fd);
 
-    snprintf(cmd, sizeof(cmd), "./bitnet_bench -m %s >/dev/null 2>%s",
-             model_path, stderr_path);
+    fd = mkstemp(stdout_path);
+    assert(fd >= 0);
+    close(fd);
+
+    snprintf(cmd, sizeof(cmd), "./bitnet_bench -m %s >%s 2>%s",
+             model_path, stdout_path, stderr_path);
     status = system(cmd);
     assert(status != -1);
     assert(WIFEXITED(status));
@@ -440,6 +446,24 @@ static void run_bench_fixture_success_case(const char *label) {
         assert(0);
     }
 
+    read_file(stdout_path, stdout_buf, sizeof(stdout_buf));
+
+    static const char *required_fields[] = {
+        "\"pp_tokens\":", "\"pp_tok_s\":",
+        "\"tg_tokens\":", "\"tg_tok_s\":",
+        "\"pp_attn_ms\":", "\"tg_attn_ms\":",
+        "\"threads\":", "\"n_params_m\":", "\"engine\":",
+    };
+    for (size_t i = 0; i < sizeof(required_fields) / sizeof(required_fields[0]); i++) {
+        if (strstr(stdout_buf, required_fields[i]) == NULL) {
+            fprintf(stderr,
+                    "%s\nExpected JSON stdout to contain field %s\nActual stdout: %s\n",
+                    label, required_fields[i], stdout_buf);
+            assert(0);
+        }
+    }
+
+    unlink(stdout_path);
     unlink(stderr_path);
     unlink(model_path);
     printf("%s: OK\n", label);
