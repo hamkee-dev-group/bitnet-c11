@@ -971,6 +971,145 @@ static void create_bad_i2s_cols_fixture(char path_template[]) {
     assert(fclose(fp) == 0);
 }
 
+/*
+ * Create a model fixture with a specific output-head tensor configuration.
+ * extra_tensors / n_extra are appended after the base layer tensors and
+ * n_extra_kv additional KV slots are reserved (all KVs are written by the
+ * caller before the tensor info section — this helper only adds the 11 base
+ * KVs).
+ */
+static void create_output_head_fixture(char path_template[],
+                                       const fixture_tensor_t *extra_tensors,
+                                       size_t n_extra) {
+    static const fixture_tensor_t base[] = {
+        { "token_embd.weight",        BN_GGML_TYPE_F32, 2, { 128, 4 } },
+        { "output_norm.weight",       BN_GGML_TYPE_F32, 1, { 128, 1 } },
+        { "blk.0.attn_norm.weight",   BN_GGML_TYPE_F32, 1, { 128, 1 } },
+        { "blk.0.attn_sub_norm.weight", BN_GGML_TYPE_F32, 1, { 128, 1 } },
+        { "blk.0.ffn_norm.weight",    BN_GGML_TYPE_F32, 1, { 128, 1 } },
+        { "blk.0.ffn_sub_norm.weight", BN_GGML_TYPE_F32, 1, { 128, 1 } },
+        { "blk.0.attn_q.weight",      BN_GGML_TYPE_I2_S, 2, { 128, 128 } },
+        { "blk.0.attn_q.weight.scale", BN_GGML_TYPE_F32, 1, { 1, 1 } },
+        { "blk.0.attn_k.weight",      BN_GGML_TYPE_I2_S, 2, { 128, 128 } },
+        { "blk.0.attn_k.weight.scale", BN_GGML_TYPE_F32, 1, { 1, 1 } },
+        { "blk.0.attn_v.weight",      BN_GGML_TYPE_I2_S, 2, { 128, 128 } },
+        { "blk.0.attn_v.weight.scale", BN_GGML_TYPE_F32, 1, { 1, 1 } },
+        { "blk.0.attn_output.weight", BN_GGML_TYPE_I2_S, 2, { 128, 128 } },
+        { "blk.0.attn_output.weight.scale", BN_GGML_TYPE_F32, 1, { 1, 1 } },
+        { "blk.0.ffn_gate.weight",    BN_GGML_TYPE_I2_S, 2, { 128, 128 } },
+        { "blk.0.ffn_gate.weight.scale", BN_GGML_TYPE_F32, 1, { 1, 1 } },
+        { "blk.0.ffn_up.weight",      BN_GGML_TYPE_I2_S, 2, { 128, 128 } },
+        { "blk.0.ffn_up.weight.scale", BN_GGML_TYPE_F32, 1, { 1, 1 } },
+        { "blk.0.ffn_down.weight",    BN_GGML_TYPE_I2_S, 2, { 128, 128 } },
+        { "blk.0.ffn_down.weight.scale", BN_GGML_TYPE_F32, 1, { 1, 1 } },
+    };
+    size_t n_base = sizeof(base) / sizeof(base[0]);
+    size_t n_tensors = n_base + n_extra;
+    uint64_t offset = 0;
+
+    int fd = mkstemp(path_template);
+    assert(fd >= 0);
+
+    FILE *fp = fdopen(fd, "wb");
+    assert(fp != NULL);
+
+    assert(fwrite("GGUF", 1, 4, fp) == 4);
+    write_u32(fp, 3);
+    write_u64(fp, n_tensors);
+    write_u64(fp, 11);
+
+    write_str(fp, "general.architecture");
+    write_u32(fp, BN_GGUF_TYPE_STRING);
+    write_str(fp, "bitnet-b1.58");
+
+    write_str(fp, "general.alignment");
+    write_u32(fp, BN_GGUF_TYPE_UINT32);
+    write_u32(fp, 32);
+
+    write_str(fp, "bitnet-b1.58.vocab_size");
+    write_u32(fp, BN_GGUF_TYPE_UINT32);
+    write_u32(fp, 4);
+
+    write_str(fp, "bitnet-b1.58.embedding_length");
+    write_u32(fp, BN_GGUF_TYPE_UINT32);
+    write_u32(fp, 128);
+
+    write_str(fp, "bitnet-b1.58.block_count");
+    write_u32(fp, BN_GGUF_TYPE_UINT32);
+    write_u32(fp, 1);
+
+    write_str(fp, "bitnet-b1.58.attention.head_count");
+    write_u32(fp, BN_GGUF_TYPE_UINT32);
+    write_u32(fp, 1);
+
+    write_str(fp, "bitnet-b1.58.attention.head_count_kv");
+    write_u32(fp, BN_GGUF_TYPE_UINT32);
+    write_u32(fp, 1);
+
+    write_str(fp, "bitnet-b1.58.feed_forward_length");
+    write_u32(fp, BN_GGUF_TYPE_UINT32);
+    write_u32(fp, 128);
+
+    write_str(fp, "bitnet-b1.58.context_length");
+    write_u32(fp, BN_GGUF_TYPE_UINT32);
+    write_u32(fp, 8);
+
+    write_str(fp, "bitnet-b1.58.attention.layer_norm_rms_epsilon");
+    write_u32(fp, BN_GGUF_TYPE_FLOAT32);
+    {
+        float eps = 1e-5f;
+        assert(fwrite(&eps, sizeof(eps), 1, fp) == 1);
+    }
+
+    write_str(fp, "bitnet-b1.58.rope.freq_base");
+    write_u32(fp, BN_GGUF_TYPE_FLOAT32);
+    {
+        float freq_base = 10000.0f;
+        assert(fwrite(&freq_base, sizeof(freq_base), 1, fp) == 1);
+    }
+
+    /* Write tensor info for base tensors. */
+    uint64_t offsets[40];
+    assert(n_tensors <= sizeof(offsets) / sizeof(offsets[0]));
+    for (size_t i = 0; i < n_base; i++) {
+        const fixture_tensor_t *t = &base[i];
+        offsets[i] = offset;
+        write_str(fp, t->name);
+        write_u32(fp, t->n_dims);
+        for (uint32_t d = 0; d < t->n_dims; d++) write_u64(fp, t->ne[d]);
+        write_u32(fp, t->type);
+        write_u64(fp, offset);
+        offset += fixture_tensor_nbytes(t);
+        offset = align_up(offset, 32);
+    }
+    /* Write tensor info for extra tensors. */
+    for (size_t i = 0; i < n_extra; i++) {
+        const fixture_tensor_t *t = &extra_tensors[i];
+        offsets[n_base + i] = offset;
+        write_str(fp, t->name);
+        write_u32(fp, t->n_dims);
+        for (uint32_t d = 0; d < t->n_dims; d++) write_u64(fp, t->ne[d]);
+        write_u32(fp, t->type);
+        write_u64(fp, offset);
+        offset += fixture_tensor_nbytes(t);
+        offset = align_up(offset, 32);
+    }
+
+    write_padding(fp, 32);
+    uint64_t data_start = (uint64_t)ftell(fp);
+
+    for (size_t i = 0; i < n_base; i++) {
+        write_zero_padding_to(fp, offsets[i], data_start);
+        write_fixture_tensor_data(fp, &base[i]);
+    }
+    for (size_t i = 0; i < n_extra; i++) {
+        write_zero_padding_to(fp, offsets[n_base + i], data_start);
+        write_fixture_tensor_data(fp, &extra_tensors[i]);
+    }
+
+    assert(fclose(fp) == 0);
+}
+
 static void create_missing_path(char path_template[]) {
     int fd = mkstemp(path_template);
     assert(fd >= 0);
@@ -1241,6 +1380,57 @@ int main(void) {
         create_noncanonical_bool_array_fixture(p);
         printf("Test 26: Reject non-canonical BOOL array element... ");
         assert(bn_gguf_open(p) == NULL);
+        assert(unlink(p) == 0);
+        printf("OK\n");
+    }
+
+    /* --- output.weight / output.scale combination validation --- */
+    {
+        /* F32 output.weight + stray output.scale → reject */
+        fixture_tensor_t extra[] = {
+            { "output.weight", BN_GGML_TYPE_F32, 2, { 128, 4 } },
+            { "output.scale",  BN_GGML_TYPE_F32, 1, { 1, 1 } },
+        };
+        char p[] = "/tmp/bn_out_f32_scale_XXXXXX";
+        create_output_head_fixture(p, extra, 2);
+        printf("Test 27: Reject output.scale with F32 output.weight... ");
+        assert(bitnet_model_load(p) == NULL);
+        assert(unlink(p) == 0);
+        printf("OK\n");
+    }
+    {
+        /* No output.weight (tied) + stray output.scale → reject */
+        fixture_tensor_t extra[] = {
+            { "output.scale", BN_GGML_TYPE_F32, 1, { 1, 1 } },
+        };
+        char p[] = "/tmp/bn_out_tied_scale_XXXXXX";
+        create_output_head_fixture(p, extra, 1);
+        printf("Test 28: Reject output.scale without output.weight... ");
+        assert(bitnet_model_load(p) == NULL);
+        assert(unlink(p) == 0);
+        printf("OK\n");
+    }
+    {
+        /* I2_S output.weight without output.scale → reject */
+        fixture_tensor_t extra[] = {
+            { "output.weight", BN_GGML_TYPE_I2_S, 2, { 128, 4 } },
+        };
+        char p[] = "/tmp/bn_out_i2s_noscale_XXXXXX";
+        create_output_head_fixture(p, extra, 1);
+        printf("Test 29: Reject I2_S output.weight without output.scale... ");
+        assert(bitnet_model_load(p) == NULL);
+        assert(unlink(p) == 0);
+        printf("OK\n");
+    }
+    {
+        /* output.weight with wrong shape → reject */
+        fixture_tensor_t extra[] = {
+            { "output.weight", BN_GGML_TYPE_F32, 2, { 128, 8 } },
+        };
+        char p[] = "/tmp/bn_out_bad_shape_XXXXXX";
+        create_output_head_fixture(p, extra, 1);
+        printf("Test 30: Reject output.weight with wrong shape... ");
+        assert(bitnet_model_load(p) == NULL);
         assert(unlink(p) == 0);
         printf("OK\n");
     }

@@ -623,6 +623,14 @@ bitnet_model_t *bitnet_model_load(const char *path) {
         m->output_is_i2s = false;
     }
 
+    /* Reject stray output.scale when output.weight is not I2_S. */
+    if (!m->output_is_i2s && bn_gguf_find_tensor(g, "output.scale")) {
+        fprintf(stderr,
+                "model: output.scale present but output.weight is not I2_S\n");
+        bitnet_model_free(m);
+        return NULL;
+    }
+
     m->layers = calloc((size_t)m->n_layer, sizeof(m->layers[0]));
     if (!m->layers) { bitnet_model_free(m); return NULL; }
 
