@@ -83,6 +83,7 @@ int main(int argc, char **argv) {
     float *logits = NULL;
 
     fprintf(stderr, "\n--- Prompt Processing Benchmark ---\n");
+    double pp_attn_time = 0.0;
     {
         const char *prompt = "The quick brown fox jumps over the lazy dog. "
                              "This is a benchmark prompt designed to test "
@@ -93,6 +94,7 @@ int main(int argc, char **argv) {
         int n = bitnet_tokenize(ctx, prompt, tokens, 512);
         fprintf(stderr, "Prompt length: %d tokens\n", n);
 
+        bitnet_attn_time_reset(ctx);
         double t0 = now_sec();
         for (int i = 0; i < n; i++) {
             bool need_logits = (i == n - 1);
@@ -107,15 +109,19 @@ int main(int argc, char **argv) {
         }
         double t1 = now_sec();
         double pp_time = t1 - t0;
+        pp_attn_time = bitnet_attn_time_reset(ctx);
         fprintf(stderr, "Prompt processing: %.2f ms (%.1f tokens/sec)\n",
                 pp_time * 1000, (double)n / pp_time);
+        fprintf(stderr, "  attention time:  %.2f ms (%.1f%% of total)\n",
+                pp_attn_time * 1000,
+                pp_time > 0 ? pp_attn_time / pp_time * 100.0 : 0.0);
     }
 
     fprintf(stderr, "\n--- Token Generation Benchmark ---\n");
+    double tg_attn_time = 0.0;
     {
         int gen_count = 0;
         int n_gen = 32;
-        double t0 = now_sec();
 
         if (!logits) {
             fprintf(stderr, "Token generation benchmark has no prompt state\n");
@@ -124,6 +130,8 @@ int main(int argc, char **argv) {
             return 1;
         }
 
+        bitnet_attn_time_reset(ctx);
+        double t0 = now_sec();
         for (int i = 0; i < n_gen; i++) {
             int token = bitnet_sample_token(ctx, logits);
             gen_count++;
@@ -140,8 +148,12 @@ int main(int argc, char **argv) {
 
         double t1 = now_sec();
         double tg_time = t1 - t0;
+        tg_attn_time = bitnet_attn_time_reset(ctx);
         fprintf(stderr, "Token generation: %d tokens in %.2f ms (%.2f tokens/sec)\n",
                 gen_count, tg_time * 1000, (double)gen_count / tg_time);
+        fprintf(stderr, "  attention time:  %.2f ms (%.1f%% of total)\n",
+                tg_attn_time * 1000,
+                tg_time > 0 ? tg_attn_time / tg_time * 100.0 : 0.0);
     }
 
     printf("{\n");
@@ -151,6 +163,8 @@ int main(int argc, char **argv) {
            (int)((long)model->n_embd * model->n_vocab / 1000000 +
                   (long)model->n_layer * (4 * (long)model->n_embd * model->n_embd +
                    3 * (long)model->n_ff * model->n_embd) / 1000000));
+    printf("  \"pp_attn_ms\": %.2f,\n", pp_attn_time * 1000);
+    printf("  \"tg_attn_ms\": %.2f,\n", tg_attn_time * 1000);
     printf("  \"engine\": \"bitnet-c11\"\n");
     printf("}\n");
 

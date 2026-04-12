@@ -232,6 +232,9 @@ typedef struct {
 
     float *logits_buf;
     int    logits_cap;
+
+    double attn_time_sec;   /* accumulated attention time (seconds) */
+    int    attn_calls;      /* number of forward calls measured */
 } bitnet_ctx_t;
 
 typedef struct {
@@ -260,6 +263,9 @@ float *bitnet_forward(bitnet_ctx_t *ctx, const int *tokens, int n_tokens,
                       bool compute_logits);
 
 int bitnet_sample_token(bitnet_ctx_t *ctx, float *logits);
+
+/* Return accumulated attention time in seconds and reset the counter. */
+double bitnet_attn_time_reset(bitnet_ctx_t *ctx);
 
 /* Returns 0 without sampling when n_prompt <= 0. */
 int bitnet_generate(bitnet_ctx_t *ctx, const int *prompt, int n_prompt,

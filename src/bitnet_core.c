@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <time.h>
 #include <pthread.h>
 #if defined(__AVX2__)
 #include <immintrin.h>
@@ -820,6 +821,123 @@ int bitnet_sample_token(bitnet_ctx_t *ctx, float *logits) {
     return bn_sample(&ctx->sampler, logits, ctx->model->n_vocab);
 }
 
+double bitnet_attn_time_reset(bitnet_ctx_t *ctx) {
+    if (!ctx) return 0.0;
+    double t = ctx->attn_time_sec;
+    ctx->attn_time_sec = 0.0;
+    ctx->attn_calls = 0;
+    return t;
+}
+
+/* ── AVX2 attention micro-kernels ──────────────────────────────────── */
+#if defined(__AVX2__)
+
+/* Horizontal sum of an __m256 register. */
+static inline float bn_hsum_f32x8(__m256 v) {
+    __m128 hi = _mm256_extractf128_ps(v, 1);
+    __m128 lo = _mm256_castps256_ps128(v);
+    __m128 s  = _mm_add_ps(lo, hi);
+    s = _mm_add_ps(s, _mm_movehl_ps(s, s));
+    s = _mm_add_ss(s, _mm_shuffle_ps(s, s, 1));
+    return _mm_cvtss_f32(s);
+}
+
+/* Dot product of two float vectors of length n using FMA. */
+static float bn_dot_f32_avx2(const float *a, const float *b, int n) {
+    __m256 acc = _mm256_setzero_ps();
+    int i = 0;
+    for (; i + 7 < n; i += 8) {
+        __m256 va = _mm256_loadu_ps(a + i);
+        __m256 vb = _mm256_loadu_ps(b + i);
+        acc = _mm256_fmadd_ps(va, vb, acc);
+    }
+    float s = bn_hsum_f32x8(acc);
+    for (; i < n; i++)
+        s += a[i] * b[i];
+    return s;
+}
+
+/* Max reduction over a float array of length n. */
+static float bn_max_f32_avx2(const float *x, int n) {
+    int i = 0;
+    __m256 vmax;
+    if (n >= 8) {
+        vmax = _mm256_loadu_ps(x);
+        i = 8;
+        for (; i + 7 < n; i += 8) {
+            __m256 v = _mm256_loadu_ps(x + i);
+            vmax = _mm256_max_ps(vmax, v);
+        }
+        /* Reduce 8-wide max to scalar. */
+        __m128 hi = _mm256_extractf128_ps(vmax, 1);
+        __m128 lo = _mm256_castps256_ps128(vmax);
+        __m128 m  = _mm_max_ps(lo, hi);
+        m = _mm_max_ps(m, _mm_movehl_ps(m, m));
+        m = _mm_max_ss(m, _mm_shuffle_ps(m, m, 1));
+        float mx = _mm_cvtss_f32(m);
+        for (; i < n; i++)
+            if (x[i] > mx) mx = x[i];
+        return mx;
+    }
+    float mx = x[0];
+    for (i = 1; i < n; i++)
+        if (x[i] > mx) mx = x[i];
+    return mx;
+}
+
+/* In-place exp(x[i] - mx) and return the sum, using AVX2. */
+static float bn_softmax_expsum_avx2(float *x, int n, float mx) {
+    __m256 vmx  = _mm256_set1_ps(mx);
+    __m256 vsum = _mm256_setzero_ps();
+    int i = 0;
+    for (; i + 7 < n; i += 8) {
+        __m256 v = _mm256_loadu_ps(x + i);
+        v = _mm256_sub_ps(v, vmx);
+        /* Scalar expf per lane – no fast exp approximation for determinism. */
+        float tmp[8];
+        _mm256_storeu_ps(tmp, v);
+        for (int j = 0; j < 8; j++) tmp[j] = expf(tmp[j]);
+        v = _mm256_loadu_ps(tmp);
+        _mm256_storeu_ps(x + i, v);
+        vsum = _mm256_add_ps(vsum, v);
+    }
+    float sum = bn_hsum_f32x8(vsum);
+    for (; i < n; i++) {
+        x[i] = expf(x[i] - mx);
+        sum += x[i];
+    }
+    return sum;
+}
+
+/* In-place x[i] /= divisor using AVX2. */
+static void bn_scale_f32_avx2(float *x, int n, float divisor) {
+    __m256 vd = _mm256_set1_ps(divisor);
+    int i = 0;
+    for (; i + 7 < n; i += 8) {
+        __m256 v = _mm256_loadu_ps(x + i);
+        v = _mm256_div_ps(v, vd);
+        _mm256_storeu_ps(x + i, v);
+    }
+    for (; i < n; i++)
+        x[i] /= divisor;
+}
+
+/* out[d] += w * v[d] for d in [0, n), using FMA. */
+static void bn_fmadd_f32_avx2(float *out, float w, const float *v, int n) {
+    __m256 vw = _mm256_set1_ps(w);
+    int d = 0;
+    for (; d + 7 < n; d += 8) {
+        __m256 vo = _mm256_loadu_ps(out + d);
+        __m256 vv = _mm256_loadu_ps(v + d);
+        vo = _mm256_fmadd_ps(vw, vv, vo);
+        _mm256_storeu_ps(out + d, vo);
+    }
+    for (; d < n; d++)
+        out[d] += w * v[d];
+}
+
+#endif /* __AVX2__ */
+
 float *bitnet_forward(bitnet_ctx_t *ctx, const int *tokens, int n_tokens,
                       bool compute_logits) {
     bitnet_model_t *m = ctx->model;
@@ -919,12 +1037,38 @@ float *bitnet_forward(bitnet_ctx_t *ctx, const int *tokens, int n_tokens,
 
             memset(attn_out, 0, (size_t)embd * sizeof(float));
 
+            struct timespec _attn_t0;
+            clock_gettime(CLOCK_MONOTONIC, &_attn_t0);
+
             for (int h = 0; h < n_head; h++) {
                 int kv_h = h / gqa_ratio;
                 float *q_h = q + h * head_dim;
-
                 float *att_h = att + (size_t)h * (size_t)(pos + 1);
-                for (int p = 0; p <= pos; p++) {
+                int seq_len = pos + 1;
+
+#if defined(__AVX2__)
+                /* ── Vectorised q·k dot products ── */
+                for (int p = 0; p < seq_len; p++) {
+                    float *k_p = ctx->k_cache + cache_layer_offset +
+                                 (size_t)p * kv_dim + kv_h * head_dim;
+                    att_h[p] = bn_dot_f32_avx2(q_h, k_p, head_dim) * scale;
+                }
+
+                /* ── Vectorised softmax ── */
+                float mx  = bn_max_f32_avx2(att_h, seq_len);
+                float sum = bn_softmax_expsum_avx2(att_h, seq_len, mx);
+                bn_scale_f32_avx2(att_h, seq_len, sum);
+
+                /* ── Vectorised weighted-v accumulation ── */
+                float *out_h = attn_out + h * head_dim;
+                for (int p = 0; p < seq_len; p++) {
+                    float *v_p = ctx->v_cache + cache_layer_offset +
+                                 (size_t)p * kv_dim + kv_h * head_dim;
+                    bn_fmadd_f32_avx2(out_h, att_h[p], v_p, head_dim);
+                }
+#else
+                /* ── Scalar fallback ── */
+                for (int p = 0; p < seq_len; p++) {
                     float *k_p = ctx->k_cache + cache_layer_offset +
                                  (size_t)p * kv_dim + kv_h * head_dim;
                     float dot = 0.0f;
@@ -934,24 +1078,33 @@ float *bitnet_forward(bitnet_ctx_t *ctx, const int *tokens, int n_tokens,
                 }
 
                 float mx = att_h[0];
-                for (int p = 1; p <= pos; p++)
+                for (int p = 1; p < seq_len; p++)
                     if (att_h[p] > mx) mx = att_h[p];
                 float sum = 0.0f;
-                for (int p = 0; p <= pos; p++) {
+                for (int p = 0; p < seq_len; p++) {
                     att_h[p] = expf(att_h[p] - mx);
                     sum += att_h[p];
                 }
-                for (int p = 0; p <= pos; p++)
+                for (int p = 0; p < seq_len; p++)
                     att_h[p] /= sum;
 
                 float *out_h = attn_out + h * head_dim;
-                for (int p = 0; p <= pos; p++) {
+                for (int p = 0; p < seq_len; p++) {
                     float w = att_h[p];
                     float *v_p = ctx->v_cache + cache_layer_offset +
                                  (size_t)p * kv_dim + kv_h * head_dim;
                     for (int d = 0; d < head_dim; d++)
                         out_h[d] += w * v_p[d];
                 }
+#endif
+            }
+
+            {
+                struct timespec _attn_t1;
+                clock_gettime(CLOCK_MONOTONIC, &_attn_t1);
+                ctx->attn_time_sec +=
+                    (double)(_attn_t1.tv_sec - _attn_t0.tv_sec) +
+                    (double)(_attn_t1.tv_nsec - _attn_t0.tv_nsec) / 1e9;
             }
 
             bn_rmsnorm_inplace(attn_out, m->layers[l].attn_sub_norm, embd, eps);
