@@ -70,6 +70,125 @@ static void bn_rope(float *q, int dim, int head_dim, int pos, float freq_base) {
     }
 }
 
+/* ---- worker pool ---- */
+
+struct bn_worker_pool {
+    pthread_t threads[15];
+    int n_workers;
+
+    pthread_mutex_t mutex;
+    pthread_cond_t  wake;
+    pthread_cond_t  done;
+
+    void *(*fn)(void *);
+    void **task_args;
+    int n_tasks;
+    int next;
+    int finished;
+    bool shutdown;
+};
+
+static void *bn_pool_worker(void *p) {
+    bn_worker_pool_t *pool = (bn_worker_pool_t *)p;
+    pthread_mutex_lock(&pool->mutex);
+    for (;;) {
+        while (pool->next >= pool->n_tasks && !pool->shutdown)
+            pthread_cond_wait(&pool->wake, &pool->mutex);
+        if (pool->shutdown) break;
+        int idx = pool->next++;
+        void *(*fn)(void *) = pool->fn;
+        void *arg = pool->task_args[idx];
+        pthread_mutex_unlock(&pool->mutex);
+        fn(arg);
+        pthread_mutex_lock(&pool->mutex);
+        pool->finished++;
+        if (pool->finished == pool->n_tasks)
+            pthread_cond_signal(&pool->done);
+    }
+    pthread_mutex_unlock(&pool->mutex);
+    return NULL;
+}
+
+static bn_worker_pool_t *bn_pool_create(int n_threads) {
+    if (n_threads <= 1) return NULL;
+    int n_workers = n_threads - 1;
+    if (n_workers > 15) n_workers = 15;
+
+    bn_worker_pool_t *pool = (bn_worker_pool_t *)calloc(1, sizeof(*pool));
+    if (!pool) return NULL;
+
+    pthread_mutex_init(&pool->mutex, NULL);
+    pthread_cond_init(&pool->wake, NULL);
+    pthread_cond_init(&pool->done, NULL);
+    pool->shutdown = false;
+
+    int created = 0;
+    for (int i = 0; i < n_workers; i++) {
+        int err = BN_PTHREAD_CREATE(&pool->threads[created], NULL,
+                                    bn_pool_worker, pool);
+        if (err == 0) {
+            created++;
+        } else {
+            fprintf(stderr,
+                    "bn_pool_create: pthread_create failed for worker %d: %s\n",
+                    i, strerror(err));
+        }
+    }
+    pool->n_workers = created;
+
+    if (created == 0) {
+        pthread_cond_destroy(&pool->done);
+        pthread_cond_destroy(&pool->wake);
+        pthread_mutex_destroy(&pool->mutex);
+        free(pool);
+        return NULL;
+    }
+    return pool;
+}
+
+static void bn_pool_free(bn_worker_pool_t *pool) {
+    if (!pool) return;
+    pthread_mutex_lock(&pool->mutex);
+    pool->shutdown = true;
+    pthread_cond_broadcast(&pool->wake);
+    pthread_mutex_unlock(&pool->mutex);
+    for (int i = 0; i < pool->n_workers; i++)
+        pthread_join(pool->threads[i], NULL);
+    pthread_cond_destroy(&pool->done);
+    pthread_cond_destroy(&pool->wake);
+    pthread_mutex_destroy(&pool->mutex);
+    free(pool);
+}
+
+static void bn_pool_run(bn_worker_pool_t *pool, void *(*fn)(void *),
+                        void *args[], int n_tasks) {
+    if (n_tasks <= 0) return;
+    if (!pool || pool->n_workers == 0 || n_tasks == 1) {
+        for (int i = 0; i < n_tasks; i++) fn(args[i]);
+        return;
+    }
+
+    int pool_tasks = n_tasks - 1;
+
+    pthread_mutex_lock(&pool->mutex);
+    pool->fn = fn;
+    pool->task_args = args + 1;
+    pool->n_tasks = pool_tasks;
+    pool->next = 0;
+    pool->finished = 0;
+    pthread_cond_broadcast(&pool->wake);
+    pthread_mutex_unlock(&pool->mutex);
+
+    fn(args[0]);
+
+    pthread_mutex_lock(&pool->mutex);
+    while (pool->finished < pool_tasks)
+        pthread_cond_wait(&pool->done, &pool->mutex);
+    pthread_mutex_unlock(&pool->mutex);
+}
+
+/* ---- GEMV multithreaded ---- */
+
 typedef struct {
     const uint8_t *weights;
     const int8_t  *acts;
@@ -93,19 +212,18 @@ static void *bn_gemv_thread(void *arg) {
 
 static void bn_gemv_mt(const uint8_t *weights, const int8_t *acts,
                         float *out, int n_rows, int n_cols,
-                        bn_i2s_gemv_fn gemv, int n_threads)
+                        bn_i2s_gemv_fn gemv, int n_threads,
+                        bn_worker_pool_t *pool)
 {
     int nt = n_threads;
     if (nt <= 1 || n_rows < nt * 4) {
         gemv(weights, acts, out, n_rows, n_cols);
         return;
     }
-
-    pthread_t threads[16];
-    int started[16] = { 0 };
-    bn_gemv_task_t tasks[16];
     if (nt > 16) nt = 16;
 
+    bn_gemv_task_t tasks[16];
+    void *args[16];
     int rows_per = n_rows / nt;
     for (int i = 0; i < nt; i++) {
         tasks[i].weights   = weights;
@@ -115,31 +233,22 @@ static void bn_gemv_mt(const uint8_t *weights, const int8_t *acts,
         tasks[i].row_start = i * rows_per;
         tasks[i].row_end   = (i == nt - 1) ? n_rows : (i + 1) * rows_per;
         tasks[i].gemv      = gemv;
-        int err = BN_PTHREAD_CREATE(&threads[i], NULL, bn_gemv_thread, &tasks[i]);
-        if (err == 0) {
-            started[i] = 1;
-            continue;
-        }
-        fprintf(stderr, "bn_gemv_mt: pthread_create failed for worker %d: %s\n",
-                i, strerror(err));
-        bn_gemv_thread(&tasks[i]);
+        args[i] = &tasks[i];
     }
-    for (int i = 0; i < nt; i++) {
-        if (started[i]) pthread_join(threads[i], NULL);
-    }
+    bn_pool_run(pool, bn_gemv_thread, args, nt);
 }
 
 static void bn_bitlinear(float *out, const uint8_t *weight,
                           const float *input, int n_out, int n_in,
                           float weight_scale, float layer_scale,
                           int8_t *act_buf, bn_i2s_gemv_fn gemv,
-                          int n_threads)
+                          int n_threads, bn_worker_pool_t *pool)
 {
     float act_scale;
     int32_t act_sum;
     bn_quantize_acts(input, act_buf, n_in, &act_scale, &act_sum);
 
-    bn_gemv_mt(weight, act_buf, out, n_out, n_in, gemv, n_threads);
+    bn_gemv_mt(weight, act_buf, out, n_out, n_in, gemv, n_threads, pool);
 
     float dscale = weight_scale / act_scale;
     if (layer_scale != 0.0f) dscale *= layer_scale;
@@ -208,7 +317,7 @@ static void *bn_f32mv_thread(void *arg) {
 
 static void bn_matmul_f32(float *out, const float *w,
                            const float *x, int n_out, int n_in,
-                           int n_threads)
+                           int n_threads, bn_worker_pool_t *pool)
 {
     int nt = n_threads;
     if (nt <= 1 || n_out < nt * 4) {
@@ -217,9 +326,9 @@ static void bn_matmul_f32(float *out, const float *w,
         return;
     }
     if (nt > 16) nt = 16;
-    pthread_t threads[16];
-    int started[16] = { 0 };
+
     bn_f32mv_task_t tasks[16];
+    void *args[16];
     int rows_per = n_out / nt;
     for (int i = 0; i < nt; i++) {
         tasks[i] = (bn_f32mv_task_t){
@@ -227,18 +336,9 @@ static void bn_matmul_f32(float *out, const float *w,
             i * rows_per,
             (i == nt - 1) ? n_out : (i + 1) * rows_per
         };
-        int err = BN_PTHREAD_CREATE(&threads[i], NULL, bn_f32mv_thread, &tasks[i]);
-        if (err == 0) {
-            started[i] = 1;
-            continue;
-        }
-        fprintf(stderr, "bn_matmul_f32: pthread_create failed for worker %d: %s\n",
-                i, strerror(err));
-        bn_f32mv_thread(&tasks[i]);
+        args[i] = &tasks[i];
     }
-    for (int i = 0; i < nt; i++) {
-        if (started[i]) pthread_join(threads[i], NULL);
-    }
+    bn_pool_run(pool, bn_f32mv_thread, args, nt);
 }
 
 static float bn_get_i2s_weight_scale(const void *data, int n_rows, int n_cols) {
@@ -649,6 +749,8 @@ bitnet_ctx_t *bitnet_ctx_new(bitnet_model_t *model, bitnet_params_t params) {
     if (!ctx->k_cache || !ctx->v_cache) goto fail;
     ctx->kv_len = 0;
 
+    ctx->pool = bn_pool_create(params.n_threads);
+
     size_t scratch_size = 64 * 1024 * 1024;
     ctx->scratch = bn_arena_create(scratch_size);
     if (!ctx->scratch.base) goto fail;
@@ -662,6 +764,7 @@ fail:
 
 void bitnet_ctx_free(bitnet_ctx_t *ctx) {
     if (!ctx) return;
+    bn_pool_free(ctx->pool);
     bn_tokenizer_free(ctx->tokenizer);
     free(ctx->k_cache);
     free(ctx->v_cache);
@@ -788,17 +891,17 @@ float *bitnet_forward(bitnet_ctx_t *ctx, const int *tokens, int n_tokens,
             bn_bitlinear(q, m->layers[l].attn_q, xn, embd, embd,
                          m->layers[l].attn_q_wscale,
                          m->layers[l].attn_q_scale,
-                         act_buf, ctx->gemv, ctx->n_threads);
+                         act_buf, ctx->gemv, ctx->n_threads, ctx->pool);
 
             bn_bitlinear(k, m->layers[l].attn_k, xn, kv_dim, embd,
                          m->layers[l].attn_k_wscale,
                          m->layers[l].attn_k_scale,
-                         act_buf, ctx->gemv, ctx->n_threads);
+                         act_buf, ctx->gemv, ctx->n_threads, ctx->pool);
 
             bn_bitlinear(v, m->layers[l].attn_v, xn, kv_dim, embd,
                          m->layers[l].attn_v_wscale,
                          m->layers[l].attn_v_scale,
-                         act_buf, ctx->gemv, ctx->n_threads);
+                         act_buf, ctx->gemv, ctx->n_threads, ctx->pool);
 
             bn_rope(q, embd, head_dim, pos, m->rope_freq_base);
             bn_rope(k, kv_dim, head_dim, pos, m->rope_freq_base);
@@ -859,7 +962,7 @@ float *bitnet_forward(bitnet_ctx_t *ctx, const int *tokens, int n_tokens,
                          embd, embd,
                          m->layers[l].attn_output_wscale,
                          m->layers[l].attn_output_scale,
-                         act_buf, ctx->gemv, ctx->n_threads);
+                         act_buf, ctx->gemv, ctx->n_threads, ctx->pool);
 
             for (int i = 0; i < embd; i++) x[i] += proj_out[i];
 
@@ -868,12 +971,12 @@ float *bitnet_forward(bitnet_ctx_t *ctx, const int *tokens, int n_tokens,
             bn_bitlinear(gate, m->layers[l].ffn_gate, xn, ff, embd,
                          m->layers[l].ffn_gate_wscale,
                          m->layers[l].ffn_gate_scale,
-                         act_buf, ctx->gemv, ctx->n_threads);
+                         act_buf, ctx->gemv, ctx->n_threads, ctx->pool);
 
             bn_bitlinear(up, m->layers[l].ffn_up, xn, ff, embd,
                          m->layers[l].ffn_up_wscale,
                          m->layers[l].ffn_up_scale,
-                         act_buf, ctx->gemv, ctx->n_threads);
+                         act_buf, ctx->gemv, ctx->n_threads, ctx->pool);
 
             for (int i = 0; i < ff; i++) {
                 float g = gate[i] > 0.0f ? gate[i] : 0.0f;
@@ -887,7 +990,7 @@ float *bitnet_forward(bitnet_ctx_t *ctx, const int *tokens, int n_tokens,
             bn_bitlinear(ffn_out, m->layers[l].ffn_down, gate, embd, ff,
                          m->layers[l].ffn_down_wscale,
                          m->layers[l].ffn_down_scale,
-                         act_buf_ff, ctx->gemv, ctx->n_threads);
+                         act_buf_ff, ctx->gemv, ctx->n_threads, ctx->pool);
 
             for (int i = 0; i < embd; i++) x[i] += ffn_out[i];
         }
@@ -902,10 +1005,11 @@ float *bitnet_forward(bitnet_ctx_t *ctx, const int *tokens, int n_tokens,
                              m->n_vocab, embd,
                              m->output_wscale,
                              m->output_scale,
-                             act_buf_out, ctx->gemv, ctx->n_threads);
+                             act_buf_out, ctx->gemv, ctx->n_threads,
+                             ctx->pool);
             } else {
                 bn_matmul_f32(ctx->logits_buf, m->output, x, m->n_vocab, embd,
-                              ctx->n_threads);
+                              ctx->n_threads, ctx->pool);
             }
         }
 

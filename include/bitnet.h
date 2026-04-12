@@ -207,6 +207,8 @@ typedef struct {
     bn_gguf_t *gguf;
 } bitnet_model_t;
 
+typedef struct bn_worker_pool bn_worker_pool_t;
+
 typedef struct {
     bitnet_model_t *model;
     bn_tokenizer_t *tokenizer;
@@ -220,6 +222,8 @@ typedef struct {
     bn_arena_t scratch;
     int n_ctx;
     int n_threads;
+
+    bn_worker_pool_t *pool;
 
     float *logits_buf;
     int    logits_cap;

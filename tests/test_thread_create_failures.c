@@ -12,11 +12,12 @@
 
 static int g_create_call_count = 0;
 static int g_fail_on_call = -1;
+static bool g_fail_all = false;
 
 static int test_pthread_create(pthread_t *thread, const pthread_attr_t *attr,
                                void *(*start_routine)(void *), void *arg) {
     g_create_call_count++;
-    if (g_create_call_count == g_fail_on_call) return EAGAIN;
+    if (g_fail_all || g_create_call_count == g_fail_on_call) return EAGAIN;
     return pthread_create(thread, attr, start_routine, arg);
 }
 
@@ -76,26 +77,10 @@ static char *capture_stderr(void (*fn)(void *), void *arg) {
     return buf;
 }
 
-typedef struct {
-    const uint8_t *weights;
-    const int8_t *acts;
-    float *out;
-    int n_rows;
-    int n_cols;
-    int n_threads;
-} gemv_case_t;
+/* ---- Test: GEMV with NULL pool (sequential fallback) ---- */
 
-static void run_gemv_case(void *arg) {
-    gemv_case_t *tc = (gemv_case_t *)arg;
-    g_create_call_count = 0;
-    g_fail_on_call = 2;
-    bn_gemv_mt(tc->weights, tc->acts, tc->out, tc->n_rows, tc->n_cols,
-               bn_i2s_gemv_scalar, tc->n_threads);
-    g_fail_on_call = -1;
-}
-
-static void test_gemv_thread_create_failure(void) {
-    printf("Test: GEMV falls back when pthread_create fails...\n");
+static void test_gemv_null_pool(void) {
+    printf("Test: GEMV falls back to sequential with NULL pool...\n");
 
     enum { ROWS = 16, COLS = 256 };
     int8_t wvals[ROWS * COLS];
@@ -103,46 +88,26 @@ static void test_gemv_thread_create_failure(void) {
     float expected[ROWS];
     float actual[ROWS];
 
-    for (int r = 0; r < ROWS; r++) {
-        for (int c = 0; c < COLS; c++) {
+    for (int r = 0; r < ROWS; r++)
+        for (int c = 0; c < COLS; c++)
             wvals[r * COLS + c] = (int8_t)(((r + c) % 3) - 1);
-        }
-    }
     for (int c = 0; c < COLS; c++) acts[c] = (int8_t)((c % 5) - 2);
 
     uint8_t *packed = pack_test_weights(wvals, ROWS, COLS);
     bn_i2s_gemv_scalar(packed, acts, expected, ROWS, COLS);
 
-    gemv_case_t tc = { packed, acts, actual, ROWS, COLS, 4 };
-    char *log = capture_stderr(run_gemv_case, &tc);
+    bn_gemv_mt(packed, acts, actual, ROWS, COLS, bn_i2s_gemv_scalar, 4, NULL);
 
-    assert(strstr(log, "bn_gemv_mt: pthread_create failed") != NULL);
     for (int i = 0; i < ROWS; i++) assert(actual[i] == expected[i]);
 
-    free(log);
     free(packed);
     printf("  OK\n");
 }
 
-typedef struct {
-    float *out;
-    const float *w;
-    const float *x;
-    int n_out;
-    int n_in;
-    int n_threads;
-} f32_case_t;
+/* ---- Test: F32 matmul with NULL pool (sequential fallback) ---- */
 
-static void run_f32_case(void *arg) {
-    f32_case_t *tc = (f32_case_t *)arg;
-    g_create_call_count = 0;
-    g_fail_on_call = 3;
-    bn_matmul_f32(tc->out, tc->w, tc->x, tc->n_out, tc->n_in, tc->n_threads);
-    g_fail_on_call = -1;
-}
-
-static void test_f32_thread_create_failure(void) {
-    printf("Test: F32 matmul falls back when pthread_create fails...\n");
+static void test_f32_null_pool(void) {
+    printf("Test: F32 matmul falls back to sequential with NULL pool...\n");
 
     enum { ROWS = 16, COLS = 16 };
     float w[ROWS * COLS];
@@ -153,22 +118,167 @@ static void test_f32_thread_create_failure(void) {
     for (int i = 0; i < ROWS * COLS; i++) w[i] = (float)((i % 7) - 3) * 0.25f;
     for (int i = 0; i < COLS; i++) x[i] = (float)(i - 4) * 0.5f;
 
-    bn_matmul_f32(expected, w, x, ROWS, COLS, 1);
+    bn_matmul_f32(expected, w, x, ROWS, COLS, 1, NULL);
+    bn_matmul_f32(actual, w, x, ROWS, COLS, 4, NULL);
 
-    f32_case_t tc = { actual, w, x, ROWS, COLS, 4 };
-    char *log = capture_stderr(run_f32_case, &tc);
-
-    assert(strstr(log, "bn_matmul_f32: pthread_create failed") != NULL);
     for (int i = 0; i < ROWS; i++) assert(actual[i] == expected[i]);
+
+    printf("  OK\n");
+}
+
+/* ---- Test: pool creation total failure → NULL ---- */
+
+typedef struct {
+    bn_worker_pool_t *pool;
+} pool_create_ctx_t;
+
+static void run_pool_create_fail_all(void *arg) {
+    pool_create_ctx_t *pc = (pool_create_ctx_t *)arg;
+    g_create_call_count = 0;
+    g_fail_all = true;
+    pc->pool = bn_pool_create(4);
+    g_fail_all = false;
+}
+
+static void test_pool_create_total_failure(void) {
+    printf("Test: Pool creation returns NULL when all threads fail...\n");
+
+    pool_create_ctx_t pc = { NULL };
+    char *log = capture_stderr(run_pool_create_fail_all, &pc);
+
+    assert(pc.pool == NULL);
+    assert(strstr(log, "bn_pool_create: pthread_create failed") != NULL);
 
     free(log);
     printf("  OK\n");
 }
 
+/* ---- Test: pool creation partial failure → reduced pool works ---- */
+
+static void run_pool_create_partial(void *arg) {
+    pool_create_ctx_t *pc = (pool_create_ctx_t *)arg;
+    g_create_call_count = 0;
+    g_fail_on_call = 2;
+    pc->pool = bn_pool_create(4);
+    g_fail_on_call = -1;
+}
+
+static void test_pool_partial_failure(void) {
+    printf("Test: Pool works with partial thread creation failure...\n");
+
+    pool_create_ctx_t pc = { NULL };
+    char *log = capture_stderr(run_pool_create_partial, &pc);
+
+    assert(pc.pool != NULL);
+    assert(pc.pool->n_workers < 3);
+    assert(strstr(log, "bn_pool_create: pthread_create failed") != NULL);
+
+    /* Use the degraded pool for GEMV and verify correctness */
+    enum { ROWS = 16, COLS = 256 };
+    int8_t wvals[ROWS * COLS];
+    int8_t acts[COLS];
+    float expected[ROWS];
+    float actual[ROWS];
+
+    for (int r = 0; r < ROWS; r++)
+        for (int c = 0; c < COLS; c++)
+            wvals[r * COLS + c] = (int8_t)(((r + c) % 3) - 1);
+    for (int c = 0; c < COLS; c++) acts[c] = (int8_t)((c % 5) - 2);
+
+    uint8_t *packed = pack_test_weights(wvals, ROWS, COLS);
+    bn_i2s_gemv_scalar(packed, acts, expected, ROWS, COLS);
+
+    bn_gemv_mt(packed, acts, actual, ROWS, COLS,
+               bn_i2s_gemv_scalar, 4, pc.pool);
+
+    for (int i = 0; i < ROWS; i++) assert(actual[i] == expected[i]);
+
+    free(packed);
+    bn_pool_free(pc.pool);
+    free(log);
+    printf("  OK\n");
+}
+
+/* ---- Test: pool lifecycle + GEMV correctness ---- */
+
+static void test_pool_gemv(void) {
+    printf("Test: GEMV works correctly with worker pool...\n");
+
+    g_create_call_count = 0;
+    g_fail_on_call = -1;
+    g_fail_all = false;
+    bn_worker_pool_t *pool = bn_pool_create(4);
+    assert(pool != NULL);
+    assert(pool->n_workers == 3);
+
+    enum { ROWS = 16, COLS = 256 };
+    int8_t wvals[ROWS * COLS];
+    int8_t acts[COLS];
+    float expected[ROWS];
+    float actual[ROWS];
+
+    for (int r = 0; r < ROWS; r++)
+        for (int c = 0; c < COLS; c++)
+            wvals[r * COLS + c] = (int8_t)(((r + c) % 3) - 1);
+    for (int c = 0; c < COLS; c++) acts[c] = (int8_t)((c % 5) - 2);
+
+    uint8_t *packed = pack_test_weights(wvals, ROWS, COLS);
+    bn_i2s_gemv_scalar(packed, acts, expected, ROWS, COLS);
+
+    /* Run twice to verify pool reuse */
+    for (int iter = 0; iter < 2; iter++) {
+        memset(actual, 0, sizeof(actual));
+        bn_gemv_mt(packed, acts, actual, ROWS, COLS,
+                   bn_i2s_gemv_scalar, 4, pool);
+        for (int i = 0; i < ROWS; i++) assert(actual[i] == expected[i]);
+    }
+
+    free(packed);
+    bn_pool_free(pool);
+    printf("  OK\n");
+}
+
+/* ---- Test: pool lifecycle + F32 matmul correctness ---- */
+
+static void test_pool_f32(void) {
+    printf("Test: F32 matmul works correctly with worker pool...\n");
+
+    g_create_call_count = 0;
+    g_fail_on_call = -1;
+    g_fail_all = false;
+    bn_worker_pool_t *pool = bn_pool_create(4);
+    assert(pool != NULL);
+
+    enum { ROWS = 16, COLS = 16 };
+    float w[ROWS * COLS];
+    float x[COLS];
+    float expected[ROWS];
+    float actual[ROWS];
+
+    for (int i = 0; i < ROWS * COLS; i++) w[i] = (float)((i % 7) - 3) * 0.25f;
+    for (int i = 0; i < COLS; i++) x[i] = (float)(i - 4) * 0.5f;
+
+    bn_matmul_f32(expected, w, x, ROWS, COLS, 1, NULL);
+
+    /* Run twice to verify pool reuse */
+    for (int iter = 0; iter < 2; iter++) {
+        memset(actual, 0, sizeof(actual));
+        bn_matmul_f32(actual, w, x, ROWS, COLS, 4, pool);
+        for (int i = 0; i < ROWS; i++) assert(actual[i] == expected[i]);
+    }
+
+    bn_pool_free(pool);
+    printf("  OK\n");
+}
+
 int main(void) {
     printf("=== Thread Creation Failure Tests ===\n\n");
-    test_gemv_thread_create_failure();
-    test_f32_thread_create_failure();
+    test_gemv_null_pool();
+    test_f32_null_pool();
+    test_pool_create_total_failure();
+    test_pool_partial_failure();
+    test_pool_gemv();
+    test_pool_f32();
     printf("\n=== All thread creation failure tests passed ===\n");
     return 0;
 }
