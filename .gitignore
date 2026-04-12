@@ -4,3 +4,5 @@ models/
 bitnet_bench
 test_*
 bitnet_cli
+compare_llama
+bench_rope
