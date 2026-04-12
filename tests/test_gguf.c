@@ -1270,6 +1270,27 @@ static void create_malformed_i2s_fixture(char path_template[]) {
     assert(fclose(fp) == 0);
 }
 
+static void create_huge_string_array_fixture(char path_template[]) {
+    int fd = mkstemp(path_template);
+    assert(fd >= 0);
+
+    FILE *fp = fdopen(fd, "wb");
+    assert(fp != NULL);
+
+    assert(fwrite("GGUF", 1, 4, fp) == 4);
+    write_u32(fp, 3);         /* version */
+    write_u64(fp, 0);         /* n_tensors */
+    write_u64(fp, 1);         /* n_kv */
+
+    /* A string array KV with impossibly large alen. */
+    write_str(fp, "test.huge_string_array");
+    write_u32(fp, BN_GGUF_TYPE_ARRAY);
+    write_u32(fp, BN_GGUF_TYPE_STRING); /* array element type */
+    write_u64(fp, UINT64_MAX);          /* alen = 0xFFFFFFFFFFFFFFFF */
+
+    assert(fclose(fp) == 0);
+}
+
 static void create_missing_path(char path_template[]) {
     int fd = mkstemp(path_template);
     assert(fd >= 0);
@@ -1612,6 +1633,16 @@ int main(void) {
         char p[] = "/tmp/bn_bad_i2s_elems_XXXXXX";
         create_malformed_i2s_fixture(p);
         printf("Test 32: Reject I2_S tensor with element count not divisible by 4... ");
+        assert(bn_gguf_open(p) == NULL);
+        assert(unlink(p) == 0);
+        printf("OK\n");
+    }
+
+    /* --- String array alen overflow rejection test --- */
+    {
+        char p[] = "/tmp/bn_huge_str_arr_XXXXXX";
+        create_huge_string_array_fixture(p);
+        printf("Test 33: Reject string array KV with impossibly large alen... ");
         assert(bn_gguf_open(p) == NULL);
         assert(unlink(p) == 0);
         printf("OK\n");

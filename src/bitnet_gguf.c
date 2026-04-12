@@ -227,6 +227,16 @@ static bool bn_read_kv_value(bn_reader_t *r, bn_gguf_kv_t *kv) {
         kv->val.arr.type = atype;
         kv->val.arr.len  = alen;
         if (atype == BN_GGUF_TYPE_STRING) {
+            if (alen > SIZE_MAX / sizeof(char *)) {
+                kv->val.arr.len = 0;
+                bn_log_kv_read_failure(r, kv, "string array length", "size overflow");
+                return false;
+            }
+            if (alen > 0 && bn_reader_remaining(r) < alen) {
+                kv->val.arr.len = 0;
+                bn_log_kv_read_failure(r, kv, "string array payload", "unexpected end of input");
+                return false;
+            }
             char **strs = (char **)calloc(alen, sizeof(char *));
             if (!strs) {
                 bn_log_kv_read_failure(r, kv, "string array storage", "allocation failed");
