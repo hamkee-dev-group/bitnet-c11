@@ -423,12 +423,6 @@ static bool bn_tensor_has_shape(const bn_gguf_tensor_t *t,
     return true;
 }
 
-static bool bn_tensor_is_scalar(const bn_gguf_tensor_t *t) {
-    if (t->n_dims == 0) return true;
-    if (t->n_dims == 1 && t->ne[0] == 1) return true;
-    return false;
-}
-
 static bool bn_require_f32_vector(bn_gguf_t *g, const char *name,
                                   uint64_t len, float **out) {
     uint64_t shape[1] = { len };
@@ -453,24 +447,6 @@ static bool bn_require_f32_vector(bn_gguf_t *g, const char *name,
     return true;
 }
 
-static bool bn_require_f32_scalar(bn_gguf_t *g, const char *name, float *out) {
-    bn_gguf_tensor_t *t = bn_gguf_find_tensor(g, name);
-    if (!t) {
-        fprintf(stderr, "model: missing %s\n", name);
-        return false;
-    }
-    if (t->type != BN_GGML_TYPE_F32) {
-        fprintf(stderr, "model: %s has type %u, expected F32\n",
-                name, t->type);
-        return false;
-    }
-    if (!bn_tensor_is_scalar(t)) {
-        fprintf(stderr, "model: %s must be a scalar F32 tensor\n", name);
-        return false;
-    }
-    *out = *(float *)t->data;
-    return true;
-}
 
 static bool bn_require_i2s_matrix(bn_gguf_t *g, const char *name,
                                   uint64_t n_rows, uint64_t n_cols,
@@ -504,7 +480,16 @@ static bool bn_require_i2s_matrix(bn_gguf_t *g, const char *name,
     }
 
     snprintf(scale_name, sizeof(scale_name), "%s.scale", name);
-    if (!bn_require_f32_scalar(g, scale_name, scale_out)) return false;
+    bn_gguf_tensor_t *st = bn_gguf_find_tensor(g, scale_name);
+    if (st) {
+        if (st->type != BN_GGML_TYPE_F32 || st->n_dims != 1 || st->ne[0] != 1) {
+            fprintf(stderr, "model: %s is not a F32 scalar\n", scale_name);
+            return false;
+        }
+        *scale_out = *(float *)st->data;
+    } else {
+        *scale_out = 0.0f;
+    }
 
     *out = (uint8_t *)t->data;
     *wscale_out = bn_get_i2s_weight_scale(t->data, (int)n_rows, (int)n_cols);
@@ -664,9 +649,9 @@ bitnet_model_t *bitnet_model_load(const char *path) {
             m->output_is_i2s = true;
             m->output_wscale = bn_get_i2s_weight_scale(oh->data,
                                 (int)oh->ne[1], (int)oh->ne[0]);
-            if (!bn_require_f32_scalar(g, "output.scale", &m->output_scale)) {
-                bitnet_model_free(m);
-                return NULL;
+            {
+                bn_gguf_tensor_t *os = bn_gguf_find_tensor(g, "output.scale");
+                m->output_scale = os ? *(float *)os->data : 0.0f;
             }
         } else {
             fprintf(stderr,

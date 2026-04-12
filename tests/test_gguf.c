@@ -1592,14 +1592,16 @@ int main(void) {
         printf("OK\n");
     }
     {
-        /* I2_S output.weight without output.scale → reject */
+        /* I2_S output.weight without output.scale → accept (scale defaults to 0) */
         fixture_tensor_t extra[] = {
             { "output.weight", BN_GGML_TYPE_I2_S, 2, { 128, 4 } },
         };
         char p[] = "/tmp/bn_out_i2s_noscale_XXXXXX";
         create_output_head_fixture(p, extra, 1);
-        printf("Test 29: Reject I2_S output.weight without output.scale... ");
-        assert(bitnet_model_load(p) == NULL);
+        printf("Test 29: Accept I2_S output.weight without output.scale... ");
+        bitnet_model_t *m29 = bitnet_model_load(p);
+        assert(m29 != NULL);
+        bitnet_model_free(m29);
         assert(unlink(p) == 0);
         printf("OK\n");
     }

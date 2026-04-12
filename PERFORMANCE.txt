@@ -1,0 +1,85 @@
+bitnet-c11 vs llama.cpp Performance Report
+===========================================
+
+Date:       2026-04-12
+Generator:  make compare (tools/compare_llama.c)
+
+Environment
+-----------
+CPU:        Intel(R) Xeon(R) CPU @ 2.80GHz (Skylake)
+Cores:      4 cores / 8 threads (1 socket, HT enabled)
+ISA:        AVX2, AVX-512 (AVX2 kernel used by bitnet-c11)
+Hypervisor: KVM
+OS:         Debian Linux 6.12.74+deb13+1-cloud-amd64
+Compiler:   gcc (Debian 14.2.0-19) 14.2.0, -O2 -mavx2 -mfma
+llama.cpp:  build 3962 (1f86f058), built with clang 19.1.7
+
+Model
+-----
+File:       models/BitNet-b1.58-2B-4T/ggml-model-i2_s.gguf
+Arch:       bitnet-b1.58
+Parameters: 2706 M
+Embedding:  2560
+Layers:     30
+Heads:      20 (5 KV)
+FF:         6912
+Context:    4096
+Quant:      I2_S (2 bpw ternary)
+
+Comparison Configuration
+------------------------
+Threads:    4
+Prompt:     "The meaning of life is"
+Generation: 32 tokens, greedy decoding (temperature=0, top_k=1)
+Timing:     CLOCK_MONOTONIC
+Batch size: 1 (both engines)
+GPU:        none (CPU-only, -ngl 0 for llama.cpp)
+
+Commands Used
+-------------
+  export BITNET_MODEL=models/BitNet-b1.58-2B-4T/ggml-model-i2_s.gguf
+  export LLAMA_CLI=/path/to/llama-cli
+  make compare
+
+  (full-model benchmark: ./bitnet_bench -m $BITNET_MODEL -t 4)
+
+Comparison Results (make compare)
+---------------------------------
+                      bitnet-c11    llama.cpp    Speedup
+Prompt eval (tok/s)     24.33         22.06       1.10x
+Generation  (tok/s)     15.13         21.77       0.69x
+
+bitnet-c11 is faster on prompt evaluation (1.10x).
+llama.cpp is faster on token generation (bitnet-c11 reaches 69% of llama.cpp speed).
+
+Full-Model Benchmark (bitnet_bench)
+-----------------------------------
+Prompt processing: 49 tokens in 1631 ms (30.0 tok/s)
+  Attention time: 48.27 ms (3.0% of total)
+
+Token generation: 32 tokens in 2149 ms (14.89 tok/s)
+  Attention time: 90.28 ms (4.2% of total)
+
+Parameters: 2706 M
+
+Kernel Microbenchmarks (bitnet_bench --micro)
+---------------------------------------------
+I2_S GEMV (4 threads):
+  attn_qkv (768x768)        1T: 15.4 us    4T: 27.7 us   speedup: 0.56x
+  ffn_gate (2048x768)       1T: 38.4 us    4T: 28.7 us   speedup: 1.34x
+  ffn_down (768x2048)       1T: 38.2 us    4T: 29.8 us   speedup: 1.28x
+  output   (32000x768)      1T: 664.9 us   4T: 203.3 us  speedup: 3.27x
+
+F32 matmul:
+  output_f32 (32000x768)    1T: 8289.8 us  4T: 2169.6 us speedup: 3.82x
+
+Notes
+-----
+- The prompt eval advantage comes from bitnet-c11's AVX2 I2_S GEMV kernel
+  being efficient for the batched prompt processing path.
+- The generation gap is expected: llama.cpp has heavily optimized single-token
+  decode paths and memory access patterns. The small-matrix GEMV (attn_qkv)
+  shows negative threading scaling (0.56x), indicating thread overhead
+  dominates at this problem size during generation.
+- All numbers are from a single run on a shared cloud VM; expect variance
+  between runs. Reproduce with `make compare`.
