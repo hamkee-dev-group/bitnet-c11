@@ -81,6 +81,26 @@ static void write_fixture_tensor_data(FILE *fp, const fixture_tensor_t *t) {
     }
 }
 
+static uint64_t align_up(uint64_t val, uint64_t alignment) {
+    return ((val + alignment - 1) / alignment) * alignment;
+}
+
+static void write_zero_padding_to(FILE *fp, uint64_t target_offset,
+                                   uint64_t data_section_start) {
+    long cur = ftell(fp);
+    assert(cur >= 0);
+    uint64_t cur_data_rel = (uint64_t)cur - data_section_start;
+    if (cur_data_rel < target_offset) {
+        uint64_t pad = target_offset - cur_data_rel;
+        static const unsigned char zeros[64] = {0};
+        while (pad > 0) {
+            uint64_t chunk = pad < sizeof(zeros) ? pad : sizeof(zeros);
+            assert(fwrite(zeros, 1, (size_t)chunk, fp) == (size_t)chunk);
+            pad -= chunk;
+        }
+    }
+}
+
 static void create_minimal_model_fixture(char path_template[],
                                          const char *missing_tensor) {
     static const fixture_tensor_t tensors[] = {
@@ -175,10 +195,12 @@ static void create_minimal_model_fixture(char path_template[],
         assert(fwrite(&freq_base, sizeof(freq_base), 1, fp) == 1);
     }
 
+    uint64_t offsets[sizeof(tensors)/sizeof(tensors[0])];
     for (size_t i = 0; i < n_tensors_total; i++) {
         const fixture_tensor_t *t = &tensors[i];
         if (missing_tensor && strcmp(t->name, missing_tensor) == 0) continue;
 
+        offsets[i] = offset;
         write_str(fp, t->name);
         write_u32(fp, t->n_dims);
         for (uint32_t d = 0; d < t->n_dims; d++) {
@@ -187,12 +209,15 @@ static void create_minimal_model_fixture(char path_template[],
         write_u32(fp, t->type);
         write_u64(fp, offset);
         offset += fixture_tensor_nbytes(t);
+        offset = align_up(offset, 32);
     }
 
     write_padding(fp, 32);
+    uint64_t data_start = (uint64_t)ftell(fp);
 
     for (size_t i = 0; i < n_tensors_total; i++) {
         if (missing_tensor && strcmp(tensors[i].name, missing_tensor) == 0) continue;
+        write_zero_padding_to(fp, offsets[i], data_start);
         write_fixture_tensor_data(fp, &tensors[i]);
     }
 
@@ -306,8 +331,10 @@ static void create_minimal_context_model_fixture(char path_template[]) {
     write_u32(fp, BN_GGUF_TYPE_UINT32);
     write_u32(fp, 1);
 
+    uint64_t offsets[sizeof(tensors)/sizeof(tensors[0])];
     for (size_t i = 0; i < n_tensors; i++) {
         const fixture_tensor_t *t = &tensors[i];
+        offsets[i] = offset;
         write_str(fp, t->name);
         write_u32(fp, t->n_dims);
         for (uint32_t d = 0; d < t->n_dims; d++) {
@@ -316,11 +343,14 @@ static void create_minimal_context_model_fixture(char path_template[]) {
         write_u32(fp, t->type);
         write_u64(fp, offset);
         offset += fixture_tensor_nbytes(t);
+        offset = align_up(offset, 32);
     }
 
     write_padding(fp, 32);
+    uint64_t data_start = (uint64_t)ftell(fp);
 
     for (size_t i = 0; i < n_tensors; i++) {
+        write_zero_padding_to(fp, offsets[i], data_start);
         write_fixture_tensor_data(fp, &tensors[i]);
     }
 
@@ -423,6 +453,73 @@ static void create_zero_alignment_fixture(char path_template[]) {
         const float data[] = {1.0f, 2.0f, 3.0f, 4.0f,
                               5.0f, 6.0f, 7.0f, 8.0f};
         assert(fwrite(data, sizeof(float), 8, fp) == 8);
+    }
+    assert(fclose(fp) == 0);
+}
+
+static void create_wrong_type_alignment_fixture(char path_template[]) {
+    int fd = mkstemp(path_template);
+    assert(fd >= 0);
+
+    FILE *fp = fdopen(fd, "wb");
+    assert(fp != NULL);
+
+    assert(fwrite("GGUF", 1, 4, fp) == 4);
+    write_u32(fp, 3);
+    write_u64(fp, 1);
+    write_u64(fp, 1);
+
+    /* Write general.alignment as STRING instead of UINT32 */
+    write_str(fp, "general.alignment");
+    write_u32(fp, BN_GGUF_TYPE_STRING);
+    write_str(fp, "32");
+
+    write_str(fp, "tensor0");
+    write_u32(fp, 2);
+    write_u64(fp, 4);
+    write_u64(fp, 2);
+    write_u32(fp, BN_GGML_TYPE_F32);
+    write_u64(fp, 0);
+
+    write_padding(fp, 32);
+
+    {
+        const float data[] = {1.0f, 2.0f, 3.0f, 4.0f,
+                              5.0f, 6.0f, 7.0f, 8.0f};
+        assert(fwrite(data, sizeof(float), 8, fp) == 8);
+    }
+    assert(fclose(fp) == 0);
+}
+
+static void create_misaligned_tensor_offset_fixture(char path_template[]) {
+    int fd = mkstemp(path_template);
+    assert(fd >= 0);
+
+    FILE *fp = fdopen(fd, "wb");
+    assert(fp != NULL);
+
+    assert(fwrite("GGUF", 1, 4, fp) == 4);
+    write_u32(fp, 3);
+    write_u64(fp, 1);
+    write_u64(fp, 1);
+
+    write_str(fp, "general.alignment");
+    write_u32(fp, BN_GGUF_TYPE_UINT32);
+    write_u32(fp, 32);
+
+    write_str(fp, "tensor0");
+    write_u32(fp, 2);
+    write_u64(fp, 4);
+    write_u64(fp, 2);
+    write_u32(fp, BN_GGML_TYPE_F32);
+    write_u64(fp, 7);  /* offset 7 is not a multiple of alignment 32 */
+
+    write_padding(fp, 32);
+
+    /* Write enough data so the tensor range doesn't exceed EOF */
+    {
+        uint8_t pad[64] = {0};
+        assert(fwrite(pad, 1, sizeof(pad), fp) == sizeof(pad));
     }
     assert(fclose(fp) == 0);
 }
@@ -720,6 +817,20 @@ int main(void) {
     printf("Test 9: Reject zero alignment... ");
     assert(bn_gguf_open(zero_alignment_path) == NULL);
     assert(unlink(zero_alignment_path) == 0);
+    printf("OK\n");
+
+    char wrong_type_alignment_path[] = "/tmp/bn_gguf_open_wrong_type_align_XXXXXX";
+    create_wrong_type_alignment_fixture(wrong_type_alignment_path);
+    printf("Test 9b: Reject wrong-typed general.alignment... ");
+    assert(bn_gguf_open(wrong_type_alignment_path) == NULL);
+    assert(unlink(wrong_type_alignment_path) == 0);
+    printf("OK\n");
+
+    char misaligned_offset_path[] = "/tmp/bn_gguf_open_misaligned_offset_XXXXXX";
+    create_misaligned_tensor_offset_fixture(misaligned_offset_path);
+    printf("Test 9c: Reject misaligned tensor offset... ");
+    assert(bn_gguf_open(misaligned_offset_path) == NULL);
+    assert(unlink(misaligned_offset_path) == 0);
     printf("OK\n");
 
     char truncated_tensor_path[] = "/tmp/bn_gguf_open_truncated_tensor_XXXXXX";

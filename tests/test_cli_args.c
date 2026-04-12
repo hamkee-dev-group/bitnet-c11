@@ -114,6 +114,26 @@ static void write_fixture_tensor_data(FILE *fp, const fixture_tensor_t *t) {
     }
 }
 
+static uint64_t align_up(uint64_t val, uint64_t alignment) {
+    return ((val + alignment - 1) / alignment) * alignment;
+}
+
+static void write_zero_padding_to(FILE *fp, uint64_t target_offset,
+                                   uint64_t data_section_start) {
+    long cur = ftell(fp);
+    assert(cur >= 0);
+    uint64_t cur_data_rel = (uint64_t)cur - data_section_start;
+    if (cur_data_rel < target_offset) {
+        uint64_t pad = target_offset - cur_data_rel;
+        static const unsigned char zeros[64] = {0};
+        while (pad > 0) {
+            uint64_t chunk = pad < sizeof(zeros) ? pad : sizeof(zeros);
+            assert(fwrite(zeros, 1, (size_t)chunk, fp) == (size_t)chunk);
+            pad -= chunk;
+        }
+    }
+}
+
 static void create_tiny_bench_fixture(char path_template[],
                                       const bench_fixture_config_t *config) {
     enum {
@@ -245,9 +265,11 @@ static void create_tiny_bench_fixture(char path_template[],
     write_str(fp, "tokenizer.ggml.eos_token_id");
     write_fixture_scalar(fp, config->eos_type, 1, "eos");
 
+    uint64_t offsets[sizeof(tensors)/sizeof(tensors[0])];
     for (uint64_t i = 0; i < n_tensors; i++) {
         const fixture_tensor_t *t = &tensors[i];
 
+        offsets[i] = offset;
         write_str(fp, t->name);
         write_u32(fp, t->n_dims);
         for (uint32_t d = 0; d < t->n_dims; d++) {
@@ -256,11 +278,14 @@ static void create_tiny_bench_fixture(char path_template[],
         write_u32(fp, t->type);
         write_u64(fp, offset);
         offset += fixture_tensor_nbytes(t);
+        offset = align_up(offset, 32);
     }
 
     write_padding(fp, 32);
+    uint64_t data_start = (uint64_t)ftell(fp);
 
     for (uint64_t i = 0; i < n_tensors; i++) {
+        write_zero_padding_to(fp, offsets[i], data_start);
         write_fixture_tensor_data(fp, &tensors[i]);
     }
 

@@ -352,7 +352,12 @@ bn_gguf_t *bn_gguf_open(const char *path) {
 
     g->alignment = 32;
     bn_gguf_kv_t *align_kv = bn_gguf_find_kv(g, "general.alignment");
-    if (align_kv && align_kv->type == BN_GGUF_TYPE_UINT32) {
+    if (align_kv) {
+        if (align_kv->type != BN_GGUF_TYPE_UINT32) {
+            fprintf(stderr, "bn_gguf_open: general.alignment has wrong type %u (expected UINT32)\n",
+                    align_kv->type);
+            goto fail_g;
+        }
         g->alignment = align_kv->val.u32;
     }
 
@@ -406,6 +411,12 @@ bn_gguf_t *bn_gguf_open(const char *path) {
         if (g->tensors[i].offset > SIZE_MAX) {
             fprintf(stderr, "bn_gguf_open: tensor '%s' offset overflow\n",
                     g->tensors[i].name);
+            goto fail_g;
+        }
+        if (g->tensors[i].offset % g->alignment != 0) {
+            fprintf(stderr, "bn_gguf_open: tensor '%s' offset %lu is not aligned to %u\n",
+                    g->tensors[i].name, (unsigned long)g->tensors[i].offset,
+                    g->alignment);
             goto fail_g;
         }
 
