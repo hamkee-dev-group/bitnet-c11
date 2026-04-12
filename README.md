@@ -92,6 +92,25 @@ export LLAMA_TOKENIZE=/path/to/llama-tokenize
 make bench BITNET_MODEL=/path/to/ggml-model-i2_s.gguf
 ```
 
+### llama.cpp Comparison
+
+`make compare` runs a consolidated benchmark against llama.cpp and outputs
+structured JSON with prompt eval and generation metrics for both engines:
+
+```sh
+export BITNET_MODEL=/path/to/ggml-model-i2_s.gguf
+export LLAMA_CLI=/path/to/llama-cli       # or ensure llama-cli is on $PATH
+make compare
+```
+
+The tool exits non-zero if the model file is missing or `llama-cli` is not found.
+JSON output goes to stdout; progress and a human-readable summary go to stderr.
+Redirect stdout to capture the artifact:
+
+```sh
+make compare > comparison.json
+```
+
 ## Performance
 
 On a 4-core Xeon E-2224G with AVX2 (single-socket, no GPU):
@@ -123,6 +142,7 @@ src/
 tools/
   bitnet_cli.c              Command-line inference tool
   bitnet_bench.c            Benchmark (prompt + generation speed)
+  compare_llama.c           Consolidated comparison runner vs llama.cpp
 
 tests/
   test_gguf.c               GGUF parser correctness

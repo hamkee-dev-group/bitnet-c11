@@ -26,7 +26,7 @@ SRCS := src/bitnet_gguf.c \
 OBJS := $(SRCS:.c=.o)
 OBJS_NO_CORE := $(filter-out src/bitnet_core.o,$(OBJS))
 
-.PHONY: all clean test bench
+.PHONY: all clean test bench compare
 
 all: bitnet_cli bitnet_bench bench_rope
 
@@ -118,5 +118,11 @@ test: test_gguf test_matmul test_thread_create_failures test_quantizer test_toke
 bench: bitnet_bench
 	./bitnet_bench -m $(BITNET_MODEL) -t 4
 
+compare_llama: $(OBJS) tools/compare_llama.c
+	$(CC) $(CFLAGS) -o $@ tools/compare_llama.c $(OBJS) $(LDFLAGS)
+
+compare: compare_llama
+	./compare_llama
+
 clean:
-	rm -f $(OBJS) bitnet_cli bitnet_bench bench_rope test_gguf test_matmul test_thread_create_failures test_quantizer test_tokenizer test_tokenizer_utf8 test_tokenizer_metadata test_tokenizer_threads test_arena test_forward_guards test_sampler_oom test_sampler_init test_vs_reference test_rmsnorm test_cli_args
+	rm -f $(OBJS) bitnet_cli bitnet_bench bench_rope compare_llama test_gguf test_matmul test_thread_create_failures test_quantizer test_tokenizer test_tokenizer_utf8 test_tokenizer_metadata test_tokenizer_threads test_arena test_forward_guards test_sampler_oom test_sampler_init test_vs_reference test_rmsnorm test_cli_args
