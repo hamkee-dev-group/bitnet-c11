@@ -43,16 +43,71 @@ static void bn_rmsnorm(float *out, const float *x, const float *w,
                         int n, float eps)
 {
     float ss = 0.0f;
-    for (int i = 0; i < n; i++) ss += x[i] * x[i];
+    int i = 0;
+#if defined(__AVX2__)
+    {
+        __m256 vss = _mm256_setzero_ps();
+        for (; i + 7 < n; i += 8) {
+            __m256 vx = _mm256_loadu_ps(x + i);
+            vss = _mm256_fmadd_ps(vx, vx, vss);
+        }
+        /* horizontal sum of 8 floats */
+        __m128 lo = _mm256_castps256_ps128(vss);
+        __m128 hi = _mm256_extractf128_ps(vss, 1);
+        __m128 s4 = _mm_add_ps(lo, hi);
+        __m128 s2 = _mm_add_ps(s4, _mm_movehl_ps(s4, s4));
+        __m128 s1 = _mm_add_ss(s2, _mm_movehdup_ps(s2));
+        ss = _mm_cvtss_f32(s1);
+    }
+#endif
+    for (; i < n; i++) ss += x[i] * x[i];
     float scale = 1.0f / sqrtf(ss / (float)n + eps);
-    for (int i = 0; i < n; i++) out[i] = x[i] * scale * w[i];
+    i = 0;
+#if defined(__AVX2__)
+    {
+        __m256 vscale = _mm256_set1_ps(scale);
+        for (; i + 7 < n; i += 8) {
+            __m256 vx = _mm256_loadu_ps(x + i);
+            __m256 vw = _mm256_loadu_ps(w + i);
+            _mm256_storeu_ps(out + i, _mm256_mul_ps(_mm256_mul_ps(vx, vscale), vw));
+        }
+    }
+#endif
+    for (; i < n; i++) out[i] = x[i] * scale * w[i];
 }
 
 static void bn_rmsnorm_inplace(float *x, const float *w, int n, float eps) {
     float ss = 0.0f;
-    for (int i = 0; i < n; i++) ss += x[i] * x[i];
+    int i = 0;
+#if defined(__AVX2__)
+    {
+        __m256 vss = _mm256_setzero_ps();
+        for (; i + 7 < n; i += 8) {
+            __m256 vx = _mm256_loadu_ps(x + i);
+            vss = _mm256_fmadd_ps(vx, vx, vss);
+        }
+        __m128 lo = _mm256_castps256_ps128(vss);
+        __m128 hi = _mm256_extractf128_ps(vss, 1);
+        __m128 s4 = _mm_add_ps(lo, hi);
+        __m128 s2 = _mm_add_ps(s4, _mm_movehl_ps(s4, s4));
+        __m128 s1 = _mm_add_ss(s2, _mm_movehdup_ps(s2));
+        ss = _mm_cvtss_f32(s1);
+    }
+#endif
+    for (; i < n; i++) ss += x[i] * x[i];
     float scale = 1.0f / sqrtf(ss / (float)n + eps);
-    for (int i = 0; i < n; i++) x[i] *= scale * w[i];
+    i = 0;
+#if defined(__AVX2__)
+    {
+        __m256 vscale = _mm256_set1_ps(scale);
+        for (; i + 7 < n; i += 8) {
+            __m256 vx = _mm256_loadu_ps(x + i);
+            __m256 vw = _mm256_loadu_ps(w + i);
+            _mm256_storeu_ps(x + i, _mm256_mul_ps(_mm256_mul_ps(vx, vscale), vw));
+        }
+    }
+#endif
+    for (; i < n; i++) x[i] *= scale * w[i];
 }
 
 static void bn_rope(float *q, int dim, int head_dim, int pos, float freq_base) {
