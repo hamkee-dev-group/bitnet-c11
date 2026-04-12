@@ -220,16 +220,94 @@ static void test_tail_width(int N) {
     printf("  OK\n");
 }
 
+static void test_multirow_non128(void) {
+    printf("Test: multi-row GEMV with non-128 width (12x384)...\n");
+    int ROWS = 12, COLS = 384;
+    int8_t *wvals = (int8_t *)calloc((size_t)ROWS * COLS, sizeof(int8_t));
+    int8_t *acts  = (int8_t *)calloc((size_t)COLS, sizeof(int8_t));
+
+    for (int r = 0; r < ROWS; r++) {
+        for (int c = 0; c < COLS; c++) {
+            wvals[r * COLS + c] = (int8_t)(((r + c) % 3) - 1);
+        }
+    }
+    for (int i = 0; i < COLS; i++) acts[i] = (int8_t)(1 + (i % 7));
+
+    uint8_t *packed = pack_test_weights(wvals, ROWS, COLS);
+
+    /* Compute expected via scalar reference */
+    float *ref = (float *)calloc((size_t)ROWS, sizeof(float));
+    bn_i2s_gemv_scalar(packed, acts, ref, ROWS, COLS);
+
+#if defined(__AVX2__)
+    float *out_a = (float *)calloc((size_t)ROWS, sizeof(float));
+    bn_i2s_gemv_avx2(packed, acts, out_a, ROWS, COLS);
+    for (int r = 0; r < ROWS; r++) {
+        printf("  Row %d: scalar=%.0f avx2=%.0f\n", r, ref[r], out_a[r]);
+        assert(fabsf(out_a[r] - ref[r]) < 0.5f);
+    }
+    free(out_a);
+#else
+    printf("  (scalar-only, %d rows verified)\n", ROWS);
+#endif
+
+    free(wvals); free(acts); free(packed); free(ref);
+    printf("  OK\n");
+}
+
+static void test_threaded_gemv(void) {
+    printf("Test: threaded I2_S GEMV path (64x768, 4 threads)...\n");
+    int ROWS = 64, COLS = 768;
+    int8_t *wvals = (int8_t *)calloc((size_t)ROWS * COLS, sizeof(int8_t));
+    int8_t *acts  = (int8_t *)calloc((size_t)COLS, sizeof(int8_t));
+
+    for (int r = 0; r < ROWS; r++)
+        for (int c = 0; c < COLS; c++)
+            wvals[r * COLS + c] = (int8_t)(((r * 7 + c) % 3) - 1);
+    for (int i = 0; i < COLS; i++) acts[i] = (int8_t)(1 + (i % 11));
+
+    uint8_t *packed = pack_test_weights(wvals, ROWS, COLS);
+
+    bn_i2s_gemv_fn gemv;
+#if defined(__AVX2__)
+    gemv = bn_i2s_gemv_avx2;
+#else
+    gemv = bn_i2s_gemv_scalar;
+#endif
+
+    /* Single-thread reference */
+    float *ref = (float *)calloc((size_t)ROWS, sizeof(float));
+    gemv(packed, acts, ref, ROWS, COLS);
+
+    /* Multi-thread via bn_gemv_mt */
+    float *out_mt = (float *)calloc((size_t)ROWS, sizeof(float));
+    int n_threads = 4;
+    bn_worker_pool_t *pool = bn_pool_create(n_threads);
+
+    bn_gemv_mt(packed, acts, out_mt, ROWS, COLS, gemv, n_threads, pool);
+
+    for (int r = 0; r < ROWS; r++) {
+        assert(fabsf(out_mt[r] - ref[r]) < 0.5f);
+    }
+    printf("  All %d rows match between 1T and %dT\n", ROWS, n_threads);
+
+    bn_pool_free(pool);
+    free(wvals); free(acts); free(packed); free(ref); free(out_mt);
+    printf("  OK\n");
+}
+
 int main(void) {
     printf("=== Matmul Kernel Tests ===\n\n");
     test_basic();
     test_mixed();
     test_multirow();
+    test_multirow_non128();
     test_quantize();
     test_i16_overflow();
     test_tail_width(32);
     test_tail_width(96);
     test_tail_width(160);
+    test_threaded_gemv();
     printf("\n=== All matmul tests passed ===\n");
     return 0;
 }

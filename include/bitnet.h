@@ -214,6 +214,18 @@ typedef struct {
 
 typedef struct bn_worker_pool bn_worker_pool_t;
 
+bn_worker_pool_t *bn_pool_create(int n_threads);
+void              bn_pool_free(bn_worker_pool_t *pool);
+
+void bn_gemv_mt(const uint8_t *weights, const int8_t *acts,
+                float *out, int n_rows, int n_cols,
+                bn_i2s_gemv_fn gemv, int n_threads,
+                bn_worker_pool_t *pool);
+
+void bn_matmul_f32(float *out, const float *w,
+                   const float *x, int n_out, int n_in,
+                   int n_threads, bn_worker_pool_t *pool);
+
 typedef struct {
     bitnet_model_t *model;
     bn_tokenizer_t *tokenizer;

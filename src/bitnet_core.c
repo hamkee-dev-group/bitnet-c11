@@ -175,7 +175,7 @@ static void *bn_pool_worker(void *p) {
     return NULL;
 }
 
-static bn_worker_pool_t *bn_pool_create(int n_threads) {
+bn_worker_pool_t *bn_pool_create(int n_threads) {
     if (n_threads <= 1) return NULL;
     int n_workers = n_threads - 1;
     if (n_workers > 15) n_workers = 15;
@@ -212,7 +212,7 @@ static bn_worker_pool_t *bn_pool_create(int n_threads) {
     return pool;
 }
 
-static void bn_pool_free(bn_worker_pool_t *pool) {
+void bn_pool_free(bn_worker_pool_t *pool) {
     if (!pool) return;
     pthread_mutex_lock(&pool->mutex);
     pool->shutdown = true;
@@ -276,10 +276,10 @@ static void *bn_gemv_thread(void *arg) {
     return NULL;
 }
 
-static void bn_gemv_mt(const uint8_t *weights, const int8_t *acts,
-                        float *out, int n_rows, int n_cols,
-                        bn_i2s_gemv_fn gemv, int n_threads,
-                        bn_worker_pool_t *pool)
+void bn_gemv_mt(const uint8_t *weights, const int8_t *acts,
+                float *out, int n_rows, int n_cols,
+                bn_i2s_gemv_fn gemv, int n_threads,
+                bn_worker_pool_t *pool)
 {
     int nt = n_threads;
     if (nt <= 1 || n_rows < nt * 4) {
@@ -381,9 +381,9 @@ static void *bn_f32mv_thread(void *arg) {
     return NULL;
 }
 
-static void bn_matmul_f32(float *out, const float *w,
-                           const float *x, int n_out, int n_in,
-                           int n_threads, bn_worker_pool_t *pool)
+void bn_matmul_f32(float *out, const float *w,
+                   const float *x, int n_out, int n_in,
+                   int n_threads, bn_worker_pool_t *pool)
 {
     int nt = n_threads;
     if (nt <= 1 || n_out < nt * 4) {
