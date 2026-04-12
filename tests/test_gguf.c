@@ -51,6 +51,8 @@ static size_t fixture_tensor_nbytes(const fixture_tensor_t *t) {
     switch (t->type) {
     case BN_GGML_TYPE_F32:
         return n_elem * sizeof(float);
+    case BN_GGML_TYPE_F16:
+        return n_elem * sizeof(uint16_t);
     case BN_GGML_TYPE_I2_S:
         return (n_elem / 4) + sizeof(float);
     default:
@@ -65,6 +67,14 @@ static void write_fixture_tensor_data(FILE *fp, const fixture_tensor_t *t) {
         size_t n_elem = nbytes / sizeof(float);
         for (size_t i = 0; i < n_elem; i++) {
             float value = 1.0f + (float)i;
+            assert(fwrite(&value, sizeof(value), 1, fp) == 1);
+        }
+        return;
+    }
+    if (t->type == BN_GGML_TYPE_F16) {
+        size_t n_elem = nbytes / sizeof(uint16_t);
+        for (size_t i = 0; i < n_elem; i++) {
+            uint16_t value = 0x3C00u + (uint16_t)(i & 0x3FFu); /* ~1.0 + frac */
             assert(fwrite(&value, sizeof(value), 1, fp) == 1);
         }
         return;
@@ -1110,6 +1120,156 @@ static void create_output_head_fixture(char path_template[],
     assert(fclose(fp) == 0);
 }
 
+/* Build a minimal valid model with token_embd.weight stored as F16. */
+static void create_f16_token_embd_fixture(char path_template[]) {
+    static const fixture_tensor_t tensors[] = {
+        { "token_embd.weight",        BN_GGML_TYPE_F16, 2, { 128, 4 } },
+        { "output_norm.weight",       BN_GGML_TYPE_F32, 1, { 128, 1 } },
+        { "blk.0.attn_norm.weight",   BN_GGML_TYPE_F32, 1, { 128, 1 } },
+        { "blk.0.attn_sub_norm.weight", BN_GGML_TYPE_F32, 1, { 128, 1 } },
+        { "blk.0.ffn_norm.weight",    BN_GGML_TYPE_F32, 1, { 128, 1 } },
+        { "blk.0.ffn_sub_norm.weight", BN_GGML_TYPE_F32, 1, { 128, 1 } },
+        { "blk.0.attn_q.weight",      BN_GGML_TYPE_I2_S, 2, { 128, 128 } },
+        { "blk.0.attn_q.weight.scale", BN_GGML_TYPE_F32, 1, { 1, 1 } },
+        { "blk.0.attn_k.weight",      BN_GGML_TYPE_I2_S, 2, { 128, 128 } },
+        { "blk.0.attn_k.weight.scale", BN_GGML_TYPE_F32, 1, { 1, 1 } },
+        { "blk.0.attn_v.weight",      BN_GGML_TYPE_I2_S, 2, { 128, 128 } },
+        { "blk.0.attn_v.weight.scale", BN_GGML_TYPE_F32, 1, { 1, 1 } },
+        { "blk.0.attn_output.weight", BN_GGML_TYPE_I2_S, 2, { 128, 128 } },
+        { "blk.0.attn_output.weight.scale", BN_GGML_TYPE_F32, 1, { 1, 1 } },
+        { "blk.0.ffn_gate.weight",    BN_GGML_TYPE_I2_S, 2, { 128, 128 } },
+        { "blk.0.ffn_gate.weight.scale", BN_GGML_TYPE_F32, 1, { 1, 1 } },
+        { "blk.0.ffn_up.weight",      BN_GGML_TYPE_I2_S, 2, { 128, 128 } },
+        { "blk.0.ffn_up.weight.scale", BN_GGML_TYPE_F32, 1, { 1, 1 } },
+        { "blk.0.ffn_down.weight",    BN_GGML_TYPE_I2_S, 2, { 128, 128 } },
+        { "blk.0.ffn_down.weight.scale", BN_GGML_TYPE_F32, 1, { 1, 1 } },
+    };
+    const size_t n_tensors = sizeof(tensors) / sizeof(tensors[0]);
+    uint64_t offset = 0;
+
+    int fd = mkstemp(path_template);
+    assert(fd >= 0);
+
+    FILE *fp = fdopen(fd, "wb");
+    assert(fp != NULL);
+
+    assert(fwrite("GGUF", 1, 4, fp) == 4);
+    write_u32(fp, 3);
+    write_u64(fp, n_tensors);
+    write_u64(fp, 11);
+
+    write_str(fp, "general.architecture");
+    write_u32(fp, BN_GGUF_TYPE_STRING);
+    write_str(fp, "bitnet-b1.58");
+
+    write_str(fp, "general.alignment");
+    write_u32(fp, BN_GGUF_TYPE_UINT32);
+    write_u32(fp, 32);
+
+    write_str(fp, "bitnet-b1.58.vocab_size");
+    write_u32(fp, BN_GGUF_TYPE_UINT32);
+    write_u32(fp, 4);
+
+    write_str(fp, "bitnet-b1.58.embedding_length");
+    write_u32(fp, BN_GGUF_TYPE_UINT32);
+    write_u32(fp, 128);
+
+    write_str(fp, "bitnet-b1.58.block_count");
+    write_u32(fp, BN_GGUF_TYPE_UINT32);
+    write_u32(fp, 1);
+
+    write_str(fp, "bitnet-b1.58.attention.head_count");
+    write_u32(fp, BN_GGUF_TYPE_UINT32);
+    write_u32(fp, 1);
+
+    write_str(fp, "bitnet-b1.58.attention.head_count_kv");
+    write_u32(fp, BN_GGUF_TYPE_UINT32);
+    write_u32(fp, 1);
+
+    write_str(fp, "bitnet-b1.58.feed_forward_length");
+    write_u32(fp, BN_GGUF_TYPE_UINT32);
+    write_u32(fp, 128);
+
+    write_str(fp, "bitnet-b1.58.context_length");
+    write_u32(fp, BN_GGUF_TYPE_UINT32);
+    write_u32(fp, 8);
+
+    write_str(fp, "bitnet-b1.58.attention.layer_norm_rms_epsilon");
+    write_u32(fp, BN_GGUF_TYPE_FLOAT32);
+    {
+        float eps = 1e-5f;
+        assert(fwrite(&eps, sizeof(eps), 1, fp) == 1);
+    }
+
+    write_str(fp, "bitnet-b1.58.rope.freq_base");
+    write_u32(fp, BN_GGUF_TYPE_FLOAT32);
+    {
+        float freq_base = 10000.0f;
+        assert(fwrite(&freq_base, sizeof(freq_base), 1, fp) == 1);
+    }
+
+    uint64_t offsets[sizeof(tensors)/sizeof(tensors[0])];
+    for (size_t i = 0; i < n_tensors; i++) {
+        const fixture_tensor_t *t = &tensors[i];
+        offsets[i] = offset;
+        write_str(fp, t->name);
+        write_u32(fp, t->n_dims);
+        for (uint32_t d = 0; d < t->n_dims; d++) {
+            write_u64(fp, t->ne[d]);
+        }
+        write_u32(fp, t->type);
+        write_u64(fp, offset);
+        offset += fixture_tensor_nbytes(t);
+        offset = align_up(offset, 32);
+    }
+
+    write_padding(fp, 32);
+    uint64_t data_start = (uint64_t)ftell(fp);
+
+    for (size_t i = 0; i < n_tensors; i++) {
+        write_zero_padding_to(fp, offsets[i], data_start);
+        write_fixture_tensor_data(fp, &tensors[i]);
+    }
+
+    assert(fclose(fp) == 0);
+}
+
+/* Build a GGUF with an I2_S tensor whose element count is not divisible by 4.
+ * bn_gguf_open() must reject this because I2_S packing requires n_elem % 4 == 0. */
+static void create_malformed_i2s_fixture(char path_template[]) {
+    int fd = mkstemp(path_template);
+    assert(fd >= 0);
+
+    FILE *fp = fdopen(fd, "wb");
+    assert(fp != NULL);
+
+    assert(fwrite("GGUF", 1, 4, fp) == 4);
+    write_u32(fp, 3);         /* version */
+    write_u64(fp, 1);         /* n_tensors */
+    write_u64(fp, 1);         /* n_kv */
+
+    write_str(fp, "general.alignment");
+    write_u32(fp, BN_GGUF_TYPE_UINT32);
+    write_u32(fp, 32);
+
+    /* Tensor with 3x3 = 9 elements — not divisible by 4. */
+    write_str(fp, "tensor0");
+    write_u32(fp, 2);                    /* n_dims */
+    write_u64(fp, 3);                    /* ne[0] */
+    write_u64(fp, 3);                    /* ne[1] */
+    write_u32(fp, BN_GGML_TYPE_I2_S);   /* type */
+    write_u64(fp, 0);                    /* offset */
+
+    write_padding(fp, 32);
+
+    /* Write some dummy data so the file isn't truncated before tensor data. */
+    {
+        uint8_t pad[64] = {0};
+        assert(fwrite(pad, 1, sizeof(pad), fp) == sizeof(pad));
+    }
+    assert(fclose(fp) == 0);
+}
+
 static void create_missing_path(char path_template[]) {
     int fd = mkstemp(path_template);
     assert(fd >= 0);
@@ -1431,6 +1591,28 @@ int main(void) {
         create_output_head_fixture(p, extra, 1);
         printf("Test 30: Reject output.weight with wrong shape... ");
         assert(bitnet_model_load(p) == NULL);
+        assert(unlink(p) == 0);
+        printf("OK\n");
+    }
+
+    /* --- F16 token_embd.weight acceptance test --- */
+    {
+        char p[] = "/tmp/bn_f16_token_embd_XXXXXX";
+        create_f16_token_embd_fixture(p);
+        printf("Test 31: Accept model with F16 token_embd.weight... ");
+        bitnet_model_t *f16m = bitnet_model_load(p);
+        assert(f16m != NULL);
+        bitnet_model_free(f16m);
+        assert(unlink(p) == 0);
+        printf("OK\n");
+    }
+
+    /* --- Malformed I2_S element count rejection test --- */
+    {
+        char p[] = "/tmp/bn_bad_i2s_elems_XXXXXX";
+        create_malformed_i2s_fixture(p);
+        printf("Test 32: Reject I2_S tensor with element count not divisible by 4... ");
+        assert(bn_gguf_open(p) == NULL);
         assert(unlink(p) == 0);
         printf("OK\n");
     }
