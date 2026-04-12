@@ -56,17 +56,25 @@ static void bn_rmsnorm_inplace(float *x, const float *w, int n, float eps) {
 
 static void bn_rope(float *q, int dim, int head_dim, int pos, float freq_base) {
     int n_heads = dim / head_dim;
+    int half = head_dim / 2;
+
+    /* Precompute cos/sin tables — only `half` unique pairs exist. */
+    float cos_tab[half];
+    float sin_tab[half];
+    for (int j = 0; j < half; j++) {
+        float freq  = 1.0f / powf(freq_base, (float)(2 * j) / (float)head_dim);
+        float theta = (float)pos * freq;
+        cos_tab[j] = cosf(theta);
+        sin_tab[j] = sinf(theta);
+    }
+
     for (int h = 0; h < n_heads; h++) {
         float *v = q + h * head_dim;
-        for (int i = 0; i < head_dim; i += 2) {
-            float freq = 1.0f / powf(freq_base, (float)i / (float)head_dim);
-            float theta = (float)pos * freq;
-            float cos_t = cosf(theta);
-            float sin_t = sinf(theta);
-            float v0 = v[i];
-            float v1 = v[i + 1];
-            v[i]     = v0 * cos_t - v1 * sin_t;
-            v[i + 1] = v0 * sin_t + v1 * cos_t;
+        for (int j = 0; j < half; j++) {
+            float v0 = v[2 * j];
+            float v1 = v[2 * j + 1];
+            v[2 * j]     = v0 * cos_tab[j] - v1 * sin_tab[j];
+            v[2 * j + 1] = v0 * sin_tab[j] + v1 * cos_tab[j];
         }
     }
 }

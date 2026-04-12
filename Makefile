@@ -28,7 +28,7 @@ OBJS_NO_CORE := $(filter-out src/bitnet_core.o,$(OBJS))
 
 .PHONY: all clean test bench
 
-all: bitnet_cli bitnet_bench
+all: bitnet_cli bitnet_bench bench_rope
 
 %.o: %.c include/bitnet.h
 	$(CC) $(CFLAGS) -c $< -o $@
@@ -38,6 +38,9 @@ bitnet_cli: $(OBJS) tools/bitnet_cli.c
 
 bitnet_bench: $(OBJS) tools/bitnet_bench.c
 	$(CC) $(CFLAGS) -o $@ tools/bitnet_bench.c $(OBJS) $(LDFLAGS)
+
+bench_rope: tools/bench_rope.c
+	$(CC) $(CFLAGS) -o $@ tools/bench_rope.c $(LDFLAGS)
 
 test_gguf: $(OBJS) tests/test_gguf.c
 	$(CC) $(CFLAGS) -o $@ tests/test_gguf.c $(OBJS) $(LDFLAGS)
@@ -111,4 +114,4 @@ bench: bitnet_bench
 	./bitnet_bench -m $(BITNET_MODEL) -t 4
 
 clean:
-	rm -f $(OBJS) bitnet_cli bitnet_bench test_gguf test_matmul test_thread_create_failures test_quantizer test_tokenizer test_tokenizer_utf8 test_tokenizer_metadata test_tokenizer_threads test_arena test_forward_guards test_sampler_oom test_sampler_init test_vs_reference test_cli_args
+	rm -f $(OBJS) bitnet_cli bitnet_bench bench_rope test_gguf test_matmul test_thread_create_failures test_quantizer test_tokenizer test_tokenizer_utf8 test_tokenizer_metadata test_tokenizer_threads test_arena test_forward_guards test_sampler_oom test_sampler_init test_vs_reference test_cli_args
