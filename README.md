@@ -12,7 +12,8 @@ No C++. No Python. No external dependencies beyond libc, libm, and pthreads.
 - **I2_S quantization** &mdash; native 2-bit ternary weight unpacking
 - **GPT-2 BPE tokenizer** &mdash; byte-level encoding, reads vocab/merges from GGUF metadata
 - **AVX2 SIMD kernel** &mdash; `_mm256_maddubs_epi16` for ternary GEMV, FMA for F32 output projection
-- **Multi-threaded** &mdash; pthread-based thread pool (`bn_pool_create`) for parallel I2_S GEMV (`bn_gemv_mt`) and F32 matmul (`bn_matmul_f32`)
+- **AVX-512 VNNI kernel** (opt-in) &mdash; `_mm512_dpbusd_epi32` variant, built via `make SIMD=avx512`
+- **Multi-threaded** &mdash; atomic spin-based thread pool (`bn_pool_create`) for parallel I2_S GEMV (`bn_gemv_mt`) and F32 matmul (`bn_matmul_f32`), with ~1 &mu;s dispatch latency
 - **Arena allocator** &mdash; zero allocations during inference after init
 - **Thread-safe** &mdash; no global state, all mutable data lives in the context
 - **Attention timing** &mdash; `bitnet_attn_time_reset()` exposes accumulated attention time for profiling
@@ -37,8 +38,14 @@ The model file is `ggml-model-i2_s.gguf` inside the downloaded directory
 
 ```sh
 make                # AVX2 (default, recommended for x86-64)
+make SIMD=avx512    # AVX-512 + VNNI (auto-dispatches at runtime when built)
 make SIMD=scalar    # portable scalar fallback (any platform)
 ```
+
+The AVX-512 build requires a CPU with AVX-512F, AVX-512BW, AVX-512VL, and
+AVX-512VNNI. It produces byte-identical output to the AVX2 build; on most
+Xeon / EPYC / Ice Lake-class CPUs the two are within noise, since generation
+is not bound by the GEMV kernel at typical BitNet-2B sizes.
 
 Requires a C11 compiler (gcc, clang) and pthreads. That's it.
 
@@ -163,15 +170,21 @@ methodology: greedy decoding, 32-token generation, 4 threads,
 
 ## Performance
 
-Measured with `make compare` on an 8-core CPU (AVX2, single-socket, no GPU),
-BitNet-b1.58-2B-4T model, greedy decoding. The `compare_llama` benchmark
-hard-codes 4 threads (`N_THREADS 4`) and 32 generated tokens, so the numbers
-below reflect 4-thread execution on the 8-core machine:
+Measured with `make compare` on an 8-core Intel Xeon @ 2.8 GHz (AVX-512 VNNI
+available, single-socket, no GPU), BitNet-b1.58-2B-4T model, greedy decoding.
+`compare_llama` hard-codes 4 threads (`N_THREADS 4`) and 32 generated tokens,
+so the numbers below reflect 4-thread execution:
 
-| Metric | bitnet-c11 | llama.cpp | Speedup |
-|--------|------------|-----------|---------|
-| Prompt eval | ~15 tok/s | ~12 tok/s | ~1.25x |
-| Generation | 7.7 tok/s | 6.9 tok/s | ~1.12x |
+| Metric | bitnet-c11 (AVX2 build) | llama.cpp (AVX-VNNI) | Ratio |
+|--------|-------------------------|----------------------|-------|
+| Prompt eval | 31.2 tok/s | 20.1 tok/s | **1.55&times; bitnet-c11** |
+| Generation | 17.6 tok/s | 20.6 tok/s | 0.85&times; (llama.cpp 1.17&times; faster) |
+
+The AVX-512 build produces byte-identical output to the AVX2 build and
+performs within noise on the same hardware (~15.5 vs ~15.7 tok/s generation
+at 4 threads); the GEMV kernel is not the bottleneck at 2B parameters, so
+VNNI's reduced op count doesn't translate into end-to-end speedup. The
+remaining gap to llama.cpp is elsewhere in the per-layer pipeline.
 
 To reproduce, run `make compare` with `BITNET_MODEL` pointing at
 `models/BitNet-b1.58-2B-4T/ggml-model-i2_s.gguf` and `LLAMA_CLI` pointing
@@ -193,8 +206,9 @@ src/
   bitnet_quant.c            Activation quantization (float -> int8)
   bitnet_matmul_scalar.c    Portable scalar I2_S GEMV kernel
   bitnet_matmul_avx2.c      AVX2 optimized I2_S GEMV kernel
+  bitnet_matmul_avx512.c    AVX-512 + VNNI I2_S GEMV kernel (opt-in via SIMD=avx512)
   bitnet_sampler.c          Temperature / top-k / top-p sampling
-  bitnet_core.c             Model loading, thread pool, transformer forward pass
+  bitnet_core.c             Model loading, atomic spin thread pool, transformer forward pass
 
 tools/
   bitnet_cli.c              Command-line inference tool
@@ -240,7 +254,9 @@ The core operation for ternary weight layers:
 3. Dequantize: `output = (raw - sum(x_int8)) * weight_scale / act_scale`
 
 The AVX2 kernel processes 128 elements per block using `_mm256_maddubs_epi16`
-for the unsigned-times-signed multiply, achieving near-peak throughput.
+for the unsigned-times-signed multiply. The optional AVX-512 kernel processes
+256 elements per block using `_mm512_dpbusd_epi32` (VNNI), accumulating
+directly into int32 without the 16-bit intermediate.
 
 ## Library API
 

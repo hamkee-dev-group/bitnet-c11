@@ -34,12 +34,13 @@ enum {
     CLI_MAX_PROMPT_TOKENS = 4096,
 };
 
-static void on_token(int token, const char *text, void *ud) {
+static bool on_token(int token, const char *text, void *ud) {
     gen_state_t *state = (gen_state_t *)ud;
     (void)token;
     printf("%s", text);
     fflush(stdout);
     state->tokens_generated++;
+    return true;
 }
 
 static int parse_int_option(const char *opt, const char *value,

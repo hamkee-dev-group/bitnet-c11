@@ -8,7 +8,10 @@ SIMD     ?= avx2
 
 BITNET_MODEL ?= models/BitNet-b1.58-2B-4T/ggml-model-i2_s.gguf
 
-ifeq ($(SIMD),avx2)
+ifeq ($(SIMD),avx512)
+    CFLAGS += -mavx2 -mfma -mavx512f -mavx512bw -mavx512vl -mavx512vnni
+    MATMUL_SRC = src/bitnet_matmul_avx512.c src/bitnet_matmul_avx2.c src/bitnet_matmul_scalar.c
+else ifeq ($(SIMD),avx2)
     CFLAGS += -mavx2 -mfma
     MATMUL_SRC = src/bitnet_matmul_avx2.c src/bitnet_matmul_scalar.c
 else ifeq ($(SIMD),neon)
@@ -127,4 +130,4 @@ compare: compare_llama
 	./compare_llama
 
 clean:
-	rm -f $(OBJS) bitnet_cli bitnet_bench bench_rope compare_llama test_gguf test_matmul test_thread_create_failures test_quantizer test_tokenizer test_tokenizer_utf8 test_tokenizer_metadata test_tokenizer_threads test_arena test_forward_guards test_sampler_oom test_sampler_init test_vs_reference test_rmsnorm test_cli_args
+	rm -f $(OBJS) src/bitnet_matmul_avx512.o src/bitnet_matmul_avx2.o src/bitnet_matmul_scalar.o bitnet_cli bitnet_bench bench_rope compare_llama test_gguf test_matmul test_thread_create_failures test_quantizer test_tokenizer test_tokenizer_utf8 test_tokenizer_metadata test_tokenizer_threads test_arena test_forward_guards test_sampler_oom test_sampler_init test_vs_reference test_rmsnorm test_cli_args

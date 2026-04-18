@@ -119,6 +119,7 @@ int             bn_tokenize(bn_tokenizer_t *t, const char *text,
 char           *bn_detokenize(bn_tokenizer_t *t, const int *tokens, int n);
 int             bn_token_bos(bn_tokenizer_t *t);
 int             bn_token_eos(bn_tokenizer_t *t);
+int             bn_token_eot(bn_tokenizer_t *t);
 /* Returns a pointer to a thread-local decoded token string. The pointer
  * remains valid only until the next `bn_token_text()` call on the same
  * thread. Token IDs outside the tokenizer vocabulary return `""`. */
@@ -143,6 +144,11 @@ void bn_i2s_gemv_scalar(const uint8_t *weights, const int8_t *acts,
 #if defined(__AVX2__)
 void bn_i2s_gemv_avx2(const uint8_t *weights, const int8_t *acts,
                       float *out, int n_rows, int n_cols);
+#endif
+
+#if defined(__AVX512F__) && defined(__AVX512BW__) && defined(__AVX512VNNI__) && defined(__AVX512VL__)
+void bn_i2s_gemv_avx512(const uint8_t *weights, const int8_t *acts,
+                        float *out, int n_rows, int n_cols);
 #endif
 
 typedef struct {
@@ -279,10 +285,18 @@ int bitnet_sample_token(bitnet_ctx_t *ctx, float *logits);
 /* Return accumulated attention time in seconds and reset the counter. */
 double bitnet_attn_time_reset(bitnet_ctx_t *ctx);
 
-/* Returns 0 without sampling when n_prompt <= 0. */
+/* Reset the KV cache so the next forward pass starts from position 0. */
+void bitnet_kv_clear(bitnet_ctx_t *ctx);
+
+/* Reinitialise the sampler with new generation parameters. */
+void bitnet_sampler_configure(bitnet_ctx_t *ctx, float temp, int top_k,
+                              float top_p);
+
+/* Returns 0 without sampling when n_prompt <= 0.
+ * The callback returns true to continue generation, false to stop early. */
 int bitnet_generate(bitnet_ctx_t *ctx, const int *prompt, int n_prompt,
                     int n_predict,
-                    void (*callback)(int token, const char *text, void *ud),
+                    bool (*callback)(int token, const char *text, void *ud),
                     void *userdata);
 
 #ifdef __cplusplus

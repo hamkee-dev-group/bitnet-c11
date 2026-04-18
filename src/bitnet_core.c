@@ -8,8 +8,17 @@
 #include <math.h>
 #include <time.h>
 #include <pthread.h>
+#include <stdatomic.h>
+#include <stdbool.h>
 #if defined(__AVX2__)
 #include <immintrin.h>
+#endif
+
+/* Busy-wait hint: pause on x86, generic nop elsewhere. */
+#if defined(__x86_64__) || defined(__i386__)
+#define BN_SPIN_PAUSE() __builtin_ia32_pause()
+#else
+#define BN_SPIN_PAUSE() ((void)0)
 #endif
 
 #ifndef BN_PTHREAD_CREATE
@@ -138,41 +147,68 @@ static void bn_rope(float *q, int dim, int head_dim, int pos, float freq_base) {
 
 /* ---- worker pool ---- */
 
+/* Spin-based worker pool. Dispatch cost on the condvar pool this replaced was
+ * ~40us per call (measured via bitnet_bench --micro: 768x768 GEMV was 3.2x
+ * slower on 8 threads than 1). With ~200 matmuls per generated token, that's
+ * most of the per-token wall time. This pool uses only atomics + pause:
+ *
+ *   - `generation` is bumped once per dispatch; workers spin on it.
+ *   - `next_task` is a fetch_add counter workers use to claim task indices.
+ *   - `finished` is a fetch_add counter for the completion barrier.
+ *
+ * The release on bumping `generation` publishes fn/task_args/n_tasks and the
+ * reset of `next_task`/`finished`. The acquire on reading `generation` makes
+ * those writes visible to workers. When the previous dispatch's `finished`
+ * has reached `pool_tasks`, every worker that took a task has run the task
+ * and left the inner loop, so captured task-spec locals (n, fn, args) no
+ * longer alias pool memory — the next dispatch can rewrite those fields
+ * without racing. */
 struct bn_worker_pool {
     pthread_t threads[15];
     int n_workers;
 
-    pthread_mutex_t mutex;
-    pthread_cond_t  wake;
-    pthread_cond_t  done;
+    _Atomic(uint32_t) generation;
+    _Atomic(int)      next_task;
+    _Atomic(int)      finished;
+    _Atomic(bool)     shutdown;
 
     void *(*fn)(void *);
     void **task_args;
-    int n_tasks;
-    int next;
-    int finished;
-    bool shutdown;
+    int    n_tasks;
 };
 
 static void *bn_pool_worker(void *p) {
     bn_worker_pool_t *pool = (bn_worker_pool_t *)p;
-    pthread_mutex_lock(&pool->mutex);
+    uint32_t last_gen = 0;
+
     for (;;) {
-        while (pool->next >= pool->n_tasks && !pool->shutdown)
-            pthread_cond_wait(&pool->wake, &pool->mutex);
-        if (pool->shutdown) break;
-        int idx = pool->next++;
+        /* Outer spin: wait for new dispatch or shutdown. */
+        for (;;) {
+            if (atomic_load_explicit(&pool->shutdown, memory_order_acquire))
+                return NULL;
+            uint32_t g = atomic_load_explicit(&pool->generation,
+                                              memory_order_acquire);
+            if (g != last_gen) { last_gen = g; break; }
+            BN_SPIN_PAUSE();
+        }
+
+        /* Capture task spec locally. Valid because the acquire above
+         * synchronizes with main's release when bumping generation, which
+         * main performed after writing these fields. */
+        int    n    = pool->n_tasks;
         void *(*fn)(void *) = pool->fn;
-        void *arg = pool->task_args[idx];
-        pthread_mutex_unlock(&pool->mutex);
-        fn(arg);
-        pthread_mutex_lock(&pool->mutex);
-        pool->finished++;
-        if (pool->finished == pool->n_tasks)
-            pthread_cond_signal(&pool->done);
+        void **args = pool->task_args;
+
+        /* Inner loop: claim tasks until exhausted. */
+        for (;;) {
+            int idx = atomic_fetch_add_explicit(&pool->next_task, 1,
+                                                 memory_order_acq_rel);
+            if (idx >= n) break;
+            fn(args[idx]);
+            atomic_fetch_add_explicit(&pool->finished, 1,
+                                       memory_order_release);
+        }
     }
-    pthread_mutex_unlock(&pool->mutex);
-    return NULL;
 }
 
 bn_worker_pool_t *bn_pool_create(int n_threads) {
@@ -183,10 +219,10 @@ bn_worker_pool_t *bn_pool_create(int n_threads) {
     bn_worker_pool_t *pool = (bn_worker_pool_t *)calloc(1, sizeof(*pool));
     if (!pool) return NULL;
 
-    pthread_mutex_init(&pool->mutex, NULL);
-    pthread_cond_init(&pool->wake, NULL);
-    pthread_cond_init(&pool->done, NULL);
-    pool->shutdown = false;
+    atomic_init(&pool->generation, 0u);
+    atomic_init(&pool->next_task,  0);
+    atomic_init(&pool->finished,   0);
+    atomic_init(&pool->shutdown,   false);
 
     int created = 0;
     for (int i = 0; i < n_workers; i++) {
@@ -203,9 +239,6 @@ bn_worker_pool_t *bn_pool_create(int n_threads) {
     pool->n_workers = created;
 
     if (created == 0) {
-        pthread_cond_destroy(&pool->done);
-        pthread_cond_destroy(&pool->wake);
-        pthread_mutex_destroy(&pool->mutex);
         free(pool);
         return NULL;
     }
@@ -214,15 +247,9 @@ bn_worker_pool_t *bn_pool_create(int n_threads) {
 
 void bn_pool_free(bn_worker_pool_t *pool) {
     if (!pool) return;
-    pthread_mutex_lock(&pool->mutex);
-    pool->shutdown = true;
-    pthread_cond_broadcast(&pool->wake);
-    pthread_mutex_unlock(&pool->mutex);
+    atomic_store_explicit(&pool->shutdown, true, memory_order_release);
     for (int i = 0; i < pool->n_workers; i++)
         pthread_join(pool->threads[i], NULL);
-    pthread_cond_destroy(&pool->done);
-    pthread_cond_destroy(&pool->wake);
-    pthread_mutex_destroy(&pool->mutex);
     free(pool);
 }
 
@@ -234,23 +261,23 @@ static void bn_pool_run(bn_worker_pool_t *pool, void *(*fn)(void *),
         return;
     }
 
-    int pool_tasks = n_tasks - 1;
+    int pool_tasks = n_tasks - 1;  /* main runs args[0] */
 
-    pthread_mutex_lock(&pool->mutex);
-    pool->fn = fn;
+    pool->fn        = fn;
     pool->task_args = args + 1;
-    pool->n_tasks = pool_tasks;
-    pool->next = 0;
-    pool->finished = 0;
-    pthread_cond_broadcast(&pool->wake);
-    pthread_mutex_unlock(&pool->mutex);
+    pool->n_tasks   = pool_tasks;
+    atomic_store_explicit(&pool->next_task, 0, memory_order_relaxed);
+    atomic_store_explicit(&pool->finished,  0, memory_order_relaxed);
+
+    /* Release barrier on generation bump publishes all prior writes. */
+    atomic_fetch_add_explicit(&pool->generation, 1u, memory_order_release);
 
     fn(args[0]);
 
-    pthread_mutex_lock(&pool->mutex);
-    while (pool->finished < pool_tasks)
-        pthread_cond_wait(&pool->done, &pool->mutex);
-    pthread_mutex_unlock(&pool->mutex);
+    while (atomic_load_explicit(&pool->finished,
+                                 memory_order_acquire) < pool_tasks) {
+        BN_SPIN_PAUSE();
+    }
 }
 
 /* ---- GEMV multithreaded ---- */
@@ -792,7 +819,10 @@ bitnet_ctx_t *bitnet_ctx_new(bitnet_model_t *model, bitnet_params_t params) {
     if (params.seed != 0)
         bn_sampler_seed(&ctx->sampler, params.seed);
 
-#if defined(__AVX2__)
+#if defined(__AVX512F__) && defined(__AVX512BW__) && defined(__AVX512VNNI__) && defined(__AVX512VL__)
+    ctx->gemv = bn_i2s_gemv_avx512;
+    fprintf(stderr, "ctx: using AVX-512 VNNI kernel\n");
+#elif defined(__AVX2__)
     ctx->gemv = bn_i2s_gemv_avx2;
     fprintf(stderr, "ctx: using AVX2 kernel\n");
 #else
@@ -885,6 +915,15 @@ double bitnet_attn_time_reset(bitnet_ctx_t *ctx) {
     ctx->attn_time_sec = 0.0;
     ctx->attn_calls = 0;
     return t;
+}
+
+void bitnet_kv_clear(bitnet_ctx_t *ctx) {
+    if (ctx) ctx->kv_len = 0;
+}
+
+void bitnet_sampler_configure(bitnet_ctx_t *ctx, float temp, int top_k,
+                              float top_p) {
+    if (ctx) bn_sampler_init(&ctx->sampler, temp, top_k, top_p);
 }
 
 /* ── AVX2 attention micro-kernels ──────────────────────────────────── */
@@ -1235,7 +1274,7 @@ float *bitnet_forward(bitnet_ctx_t *ctx, const int *tokens, int n_tokens,
 
 int bitnet_generate(bitnet_ctx_t *ctx, const int *prompt, int n_prompt,
                     int n_predict,
-                    void (*callback)(int token, const char *text, void *ud),
+                    bool (*callback)(int token, const char *text, void *ud),
                     void *userdata)
 {
     if (!ctx) {
@@ -1280,7 +1319,7 @@ int bitnet_generate(bitnet_ctx_t *ctx, const int *prompt, int n_prompt,
         if (token == eos) break;
 
         const char *text = bn_token_text(ctx->tokenizer, token);
-        if (callback) callback(token, text, userdata);
+        if (callback && !callback(token, text, userdata)) break;
 
         generated++;
         logits = bitnet_forward(ctx, &token, 1, true);

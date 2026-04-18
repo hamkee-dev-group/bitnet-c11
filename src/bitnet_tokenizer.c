@@ -197,6 +197,7 @@ struct bn_tokenizer {
 
     int bos_id;
     int eos_id;
+    int eot_id;
 };
 
 static uint64_t bn_hash_str(const char *s, int len) {
@@ -746,8 +747,22 @@ bn_tokenizer_t *bn_tokenizer_create(bn_gguf_t *g) {
     t->bos_id = kv_bos ? (int)kv_bos->val.u32 : 128000;
     t->eos_id = kv_eos ? (int)kv_eos->val.u32 : 128001;
 
-    fprintf(stderr, "tokenizer: loaded %d tokens, %d merges, bos=%d, eos=%d\n",
-            t->n_vocab, t->n_merges, t->bos_id, t->eos_id);
+    /* Scan vocab for <|eot_id|> token (end-of-turn marker for Llama-3). */
+    t->eot_id = -1;
+    {
+        static const char eot_tag[] = "<|eot_id|>";
+        int eot_tag_len = (int)(sizeof(eot_tag) - 1);
+        for (int i = 0; i < t->n_vocab; i++) {
+            if (t->vocab_len[i] == eot_tag_len &&
+                memcmp(t->vocab[i], eot_tag, (size_t)eot_tag_len) == 0) {
+                t->eot_id = i;
+                break;
+            }
+        }
+    }
+
+    fprintf(stderr, "tokenizer: loaded %d tokens, %d merges, bos=%d, eos=%d, eot=%d\n",
+            t->n_vocab, t->n_merges, t->bos_id, t->eos_id, t->eot_id);
     return t;
 }
 
@@ -846,6 +861,7 @@ char *bn_detokenize(bn_tokenizer_t *t, const int *tokens, int n) {
 
 int bn_token_bos(bn_tokenizer_t *t) { return t ? t->bos_id : -1; }
 int bn_token_eos(bn_tokenizer_t *t) { return t ? t->eos_id : -1; }
+int bn_token_eot(bn_tokenizer_t *t) { return t ? t->eot_id : -1; }
 
 const char *bn_token_text(bn_tokenizer_t *t, int id) {
     if (!t) return "";
