@@ -274,7 +274,7 @@ static void free_cache_guard_fixture(cache_guard_fixture_t *fx) {
     free(fx->token_embd);
 }
 
-static void collect_cb(int token, const char *text, void *ud) {
+static bool collect_cb(int token, const char *text, void *ud) {
     gen_capture_t *capture = (gen_capture_t *)ud;
 
     capture->count++;
@@ -283,6 +283,7 @@ static void collect_cb(int token, const char *text, void *ud) {
         strncpy(capture->text, text, sizeof(capture->text) - 1);
         capture->text[sizeof(capture->text) - 1] = '\0';
     }
+    return true;
 }
 
 static void assert_bn_tokenize_invalid_logged(bn_tokenizer_t *tokenizer,
