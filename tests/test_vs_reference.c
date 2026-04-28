@@ -159,7 +159,7 @@ typedef struct {
     int   text_len;
 } gen_result_t;
 
-static void collect_cb(int token, const char *text, void *ud) {
+static bool collect_cb(int token, const char *text, void *ud) {
     gen_result_t *r = (gen_result_t *)ud;
     if (r->n_tokens < 512) {
         r->tokens[r->n_tokens++] = token;
@@ -172,6 +172,7 @@ static void collect_cb(int token, const char *text, void *ud) {
             r->text[r->text_len] = '\0';
         }
     }
+    return true;
 }
 
 static void test_generation(bitnet_ctx_t *ctx) {
